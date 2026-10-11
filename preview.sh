@@ -8,13 +8,16 @@ set -e
 PORT=${1:-3000}
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "---------------------------------------------------------"
-echo "  Starting Colibristream Web Gateway on port ${PORT}..."
-echo "  URL: http://localhost:${PORT}"
-echo "---------------------------------------------------------"
+echo "========================================================="
+echo "  Colibristream Web Gateway is running!"
+echo "  Open this link in your browser: http://localhost:${PORT}"
+echo "========================================================="
 
-if command -v xdg-open >/dev/null 2>&1; then
-  (sleep 1 && xdg-open "http://localhost:${PORT}") &
+# Try to open in GUI browser if desktop environment is active (silently ignore if headless)
+if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+  if command -v xdg-open >/dev/null 2>&1; then
+    (sleep 1 && xdg-open "http://localhost:${PORT}" >/dev/null 2>&1) &
+  fi
 fi
 
 python3 -m http.server "${PORT}" --directory "${DIR}"
