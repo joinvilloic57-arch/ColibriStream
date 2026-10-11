@@ -254,16 +254,22 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     # Don't exceed memory bus saturation (sweet spot is 8-16 threads for LLM memory bandwidth)
     opt_threads = min(cpu_threads, 16)
     
+    # Smart layer offloading: For 70B-72B models, offload 32 layers to GPU (~19GB)
+    # leaving 5GB safety headroom for CUDA KV-cache allocations so cudaMalloc never fails.
+    is_massive = any(x in model_name.lower() for x in ["70b", "72b", "671b"])
+    num_gpu_layers = 32 if is_massive else 99
+    num_ctx_val = 1536 if is_massive else 2048
+
     payload = {
         "model": model_name,
         "messages": messages,
         "stream": True,
         "options": {
             "temperature": 0.7,
-            "num_gpu": 99,
+            "num_gpu": num_gpu_layers,
             "num_thread": opt_threads,
-            "num_ctx": 2048,
-            "num_batch": 512,
+            "num_ctx": num_ctx_val,
+            "num_batch": 256 if is_massive else 512,
             "f16_kv": True,
             "use_mmap": True,
             "use_mlock": False
