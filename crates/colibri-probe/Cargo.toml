@@ -1,0 +1,12 @@
+[package]
+name = "colibri-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Bare-metal hardware probe and NVMe Direct I/O benchmark subsystem"
+
+[dependencies]
+libc = "0.2"
+sysinfo = "0.30"
+raw-cpuid = "11.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

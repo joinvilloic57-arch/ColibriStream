@@ -1,0 +1,11 @@
+[package]
+name = "colibri-core"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance zero-copy mmap, SIMD dispatch, and sparse MoE streaming engine"
+
+[dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+bytemuck = { version = "1.14", features = ["derive"] }
+thiserror = "1.0"

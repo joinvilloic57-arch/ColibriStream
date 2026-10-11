@@ -1,0 +1,12 @@
+[package]
+name = "colibri-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Colibristream bare-metal CLI entrypoint binary"
+
+[dependencies]
+colibri-core = { path = "../colibri-core" }
+colibri-probe = { path = "../colibri-probe" }
+clap = { version = "4.4", features = ["derive"] }
+colored = "2.1"
+tokio = { version = "1.36", features = ["full"] }

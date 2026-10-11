@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/colibri-core",
+    "crates/colibri-probe",
+    "crates/colibri-cli",
+]
+resolver = "2"
