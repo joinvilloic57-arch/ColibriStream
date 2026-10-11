@@ -43,8 +43,11 @@ else
   curl -fsSL "http://10.0.2.235:8888/colibri" -o "${INSTALL_DIR}/colibri"
 fi
 
-chmod +x "${INSTALL_DIR}/colibri"
-ln -sf "${INSTALL_DIR}/colibri" "${INSTALL_DIR}/colibristream"
+# Ensure binaries and symlinks are set up
+cp "${INSTALL_DIR}/colibri" "${INSTALL_DIR}/colistream"
+chmod +x "${INSTALL_DIR}/colistream"
+ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibri"
+ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibristream"
 
 echo -e "${C_CYAN}[2/3] Configuring system PATH environment...${C_RESET}"
 # Ensure ~/.local/bin is in PATH across all shell profiles
@@ -62,7 +65,8 @@ if ! command -v ollama >/dev/null 2>&1; then
 fi
 
 echo -e "\n${C_GREEN}${C_BOLD}✔ Installation Complete!${C_RESET}"
-echo -e "${C_DIM}Colibristream is installed and available globally as 'colibri'.${C_RESET}\n"
+echo -e "${C_DIM}Colibristream is installed and available globally as '${C_WHITE}colistream${C_DIM}' or '${C_WHITE}colibristream${C_DIM}'.${C_RESET}\n"
+echo -e "${C_YELLOW}Tip:${C_RESET} You can run it anytime with: ${C_CYAN}colistream${C_RESET}\n"
 
 # Launch immediately into hardware scan and model hub
-exec "${INSTALL_DIR}/colibri" menu
+exec "${INSTALL_DIR}/colistream" menu

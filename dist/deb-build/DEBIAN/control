@@ -1,0 +1,11 @@
+Package: colistream
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Colibristream Team <dev@colibristream.run>
+Depends: bash (>= 4.0), curl, python3
+Description: Bare-Metal Multi-Model AI Engine & High-Performance Swarm Runtime
+ Colibristream enables consumer machines with 16-24GB VRAM to run massive
+ models (72B to 2.4T MoE) and concurrent intra-family swarms with weights
+ stored 1x in shared memory.

@@ -153,7 +153,7 @@ try:
     data = json.load(sys.stdin)
     models = data.get("models", [])
     if not models:
-        print("│  No local models installed yet. Pull one with: colibri pull <name>  │")
+        print("│  No local models installed yet. Pull one with: colistream pull <name>  │")
     for m in models:
         name = m.get("name", "unknown")
         size_gb = m.get("size", 0) / (1024**3)
@@ -169,7 +169,7 @@ cmd_pull() {
   ensure_backend
   local model="$1"
   if [ -z "$model" ]; then
-    echo -e "${C_RED}[ERROR] Specify a model name. Example: colibri pull qwen2.5-coder:7b${C_RESET}"
+    echo -e "${C_RED}[ERROR] Specify a model name. Example: colistream pull qwen2.5-coder:7b${C_RESET}"
     exit 1
   fi
   echo -e "${C_CYAN}[*] Pulling model: ${C_BOLD}${model}${C_RESET} to local bare-metal hub..."
@@ -336,7 +336,7 @@ cmd_swarm() {
   done
 
   echo -e "${C_GREEN}✔ Both agents resident in shared memory (1x RAM).${C_RESET}"
-  echo -e "${C_DIM}Direct Command: ${C_WHITE}colibri swarm ${ARCHITECT} ${WORKER}${C_RESET}"
+  echo -e "${C_DIM}Direct Command: ${C_WHITE}colistream swarm ${ARCHITECT} ${WORKER}${C_RESET}"
   echo -e "${C_DIM}Type your prompt to let them collaborate (or 'exit' / '/menu'):${C_RESET}"
   
   while true; do
@@ -429,7 +429,7 @@ cmd_swarm_builder() {
   echo -e "  • ${C_GREEN}Fast Worker   :${C_RESET} ${MODEL2}\n"
 
   echo -e "${C_YELLOW}Direct Command to run this Swarm anytime:${C_RESET}"
-  echo -e "  ${C_BOLD}${C_WHITE}colibri swarm ${MODEL1} ${MODEL2}${C_RESET}\n"
+  echo -e "  ${C_BOLD}${C_WHITE}colistream swarm ${MODEL1} ${MODEL2}${C_RESET}\n"
 
   read_input "${C_BOLD}Press Enter to boot this multi-model session now [Enter/b]: ${C_RESET}" CONF
   if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
@@ -532,7 +532,7 @@ cmd_big_catalog() {
 
     echo -e "\n${C_GREEN}${C_BOLD}Selected Model:${C_RESET} ${C_BOLD}${TARGET_MODEL}${C_RESET}"
     echo -e "${C_YELLOW}Direct Command to run anytime:${C_RESET}"
-    echo -e "  ${C_BOLD}${C_WHITE}colibri run ${TARGET_MODEL}${C_RESET}\n"
+    echo -e "  ${C_BOLD}${C_WHITE}colistream run ${TARGET_MODEL}${C_RESET}\n"
 
     read_input "${C_BOLD}Press Enter to boot chat, 'b' for catalog, or 'q' to Quit [Enter/b/q]: ${C_RESET}" ACTION
     if [ "$ACTION" = "b" ] || [ "$ACTION" = "B" ]; then
@@ -571,19 +571,19 @@ EOF
     echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Real-time collaboration │${C_RESET}"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Extreme 72B Swarm${C_RESET} (Run Big 72B + Fast 1.5B Together)          │"
-    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET} │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET} │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Instant Local Swarm${C_RESET} (Run 14B Thinker + 1.5B Coder — No Wait)  │"
-    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}   │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}   │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
-    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_GREEN}Single Big Model${C_RESET} (Run Standalone 72B Flagship Solo)          │"
-    echo -e "│      → Direct Command: ${C_CYAN}colibri run qwen2.5:72b${C_RESET}                     │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream run qwen2.5:72b${C_RESET}                     │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_YELLOW}Custom Swarm Builder${C_RESET} (Pick ANY 2+ Models to Run Together)     │"
-    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm <model1> <model2>${C_RESET}             │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm <model1> <model2>${C_RESET}             │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Big Free AI Hub Catalog${C_RESET} (Browse All 25+ Models by Family)     │"
     echo -e "│      → DeepSeek, Qwen, Llama, Mistral, Gemma, Phi                  │"
@@ -596,25 +596,25 @@ EOF
     case "$CHOICE" in
       1)
         echo -e "\n${C_CYAN}[*] Extreme 72B Swarm (Qwen 72B + 1.5B Coder) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET}\n"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET}\n"
         read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen2.5:72b" "qwen2.5-coder:1.5b"; fi
         ;;
       2)
         echo -e "\n${C_CYAN}[*] Instant Local Swarm (Qwen3 14B + 1.5B Coder) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}\n"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}\n"
         read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen3:14b" "qwen2.5-coder:1.5b"; fi
         ;;
       3)
         echo -e "\n${C_CYAN}[*] DeepSeek MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm deepseek-r1:14b deepseek-coder:6.7b${C_RESET}\n"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm deepseek-r1:14b deepseek-coder:6.7b${C_RESET}\n"
         read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"; fi
         ;;
       4)
         echo -e "\n${C_CYAN}[*] Single Big Model (Qwen 2.5 72B) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri run qwen2.5:72b${C_RESET}\n"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream run qwen2.5:72b${C_RESET}\n"
         read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_run "qwen2.5:72b"; fi
         ;;
@@ -662,6 +662,6 @@ case "$1" in
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colibri [menu|run <model>|swarm <model1> [model2]|build|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm <model1> [model2]|build|list|catalog]"
     ;;
 esac
