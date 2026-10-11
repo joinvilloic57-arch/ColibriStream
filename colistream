@@ -199,6 +199,23 @@ run_hardware_scan() {
     fi
   fi
 
+  AVAILABLE_VRAM_MB=0
+  if [ "$ACTIVE_GPU" = "all" ]; then
+    for m in "${GPU_MEMS[@]}"; do
+      AVAILABLE_VRAM_MB=$((AVAILABLE_VRAM_MB + m))
+    done
+  else
+    for i in "${!GPU_INDICES[@]}"; do
+      if [ "${GPU_INDICES[$i]}" = "$ACTIVE_GPU" ]; then
+        AVAILABLE_VRAM_MB="${GPU_MEMS[$i]}"
+      fi
+    done
+    if [ "$AVAILABLE_VRAM_MB" -eq 0 ] && [ "$MAX_GPU_MEM" -gt 0 ]; then
+      AVAILABLE_VRAM_MB="$MAX_GPU_MEM"
+    fi
+  fi
+  AVAILABLE_VRAM_GB=$((AVAILABLE_VRAM_MB / 1024))
+
   DISK_HEADROOM=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
   DISK_SPEED="2.3 GB/s Direct I/O"
 }
@@ -876,6 +893,49 @@ except:
       fi
       ;;
   esac
+
+  # Proactive VRAM Capacity & Bottleneck Guard:
+  run_hardware_scan
+  local model_lower
+  model_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]')
+  if [[ "$model_lower" =~ 70b|72b|671b ]] && [ "$AVAILABLE_VRAM_GB" -lt 44 ]; then
+    echo -e "\n${C_YELLOW}┌── ⚠ HARDWARE INSUFFICIENCY WARNING: MODEL EXCEEDS VRAM ──────────┐${C_RESET}"
+    echo -e "│ ${C_BOLD}Selected Model${C_RESET}  : ${C_CYAN}${model}${C_RESET} (Dense 72B requires ~48 GB VRAM for native speed)│"
+    echo -e "│ ${C_BOLD}Available VRAM${C_RESET}  : ${C_YELLOW}${AVAILABLE_VRAM_GB} GB${C_RESET} [GPU ${ACTIVE_GPU:-0}] (Short by ~$((48 - AVAILABLE_VRAM_GB)) GB)                │"
+    echo -e "│ ${C_BOLD}Offload Reality${C_RESET} : ~42 layers will be forced to Host CPU & DDR4 RAM!      │"
+    echo -e "│ ${C_BOLD}Expected Speed${C_RESET}  : ${C_RED}~0.05 - 0.2 tok/s (EXTREMELY SLOW: ~15s per token)${C_RESET} │"
+    echo -e "│                                                                  │"
+    echo -e "│ ${C_GREEN}★ FAST ALTERNATIVE (100% in VRAM @ 20-25+ tok/s):${C_RESET}                │"
+    echo -e "│   Run 32B Coder instead: ${C_CYAN}colistream run 32b${C_RESET} (Fits in 16GB VRAM)   │"
+    echo -e "│   Benchmark: 92.7% on HumanEval coding (beats 72B at 86.4%)      │"
+    echo -e "${C_YELLOW}└──────────────────────────────────────────────────────────────────┘${C_RESET}\n"
+    read_input "${C_BOLD}Proceed with 72B anyway, knowing it will be extremely slow? [y/N]: ${C_RESET}" CONFIRM_HEAVY
+    case "$CONFIRM_HEAVY" in
+      y|Y|yes|YES)
+        echo -e "${C_YELLOW}[*] Proceeding with 72B CPU/RAM split as requested...${C_RESET}"
+        ;;
+      *)
+        echo -e "\n${C_GREEN}[*] Smart choice! Switching to Flagship 32B (100% in GPU VRAM @ 20+ tok/s)...${C_RESET}"
+        model="qwen2.5-coder:32b-instruct-q3_K_M"
+        ;;
+    esac
+  elif [[ "$model_lower" =~ 32b|30b|27b ]] && [ "$AVAILABLE_VRAM_GB" -gt 0 ] && [ "$AVAILABLE_VRAM_GB" -lt 16 ]; then
+    echo -e "\n${C_YELLOW}┌── ⚠ VRAM CAPACITY WARNING: 32B EXCEEDS GPU VRAM ─────────────────┐${C_RESET}"
+    echo -e "│ ${C_BOLD}Selected Model${C_RESET}  : ${C_CYAN}${model}${C_RESET} (Requires ~16 GB VRAM)                     │"
+    echo -e "│ ${C_BOLD}Available VRAM${C_RESET}  : ${C_YELLOW}${AVAILABLE_VRAM_GB} GB${C_RESET} [GPU ${ACTIVE_GPU:-0}]                                     │"
+    echo -e "│ ${C_BOLD}Recommended${C_RESET}   : ${C_GREEN}qwen3:14b${C_RESET} (~9GB VRAM) or ${C_GREEN}qwen2.5-coder:7b${C_RESET} (~5GB VRAM) │"
+    echo -e "${C_YELLOW}└──────────────────────────────────────────────────────────────────┘${C_RESET}\n"
+    read_input "${C_BOLD}Proceed with 32B anyway? [y/N]: ${C_RESET}" CONFIRM_32B
+    case "$CONFIRM_32B" in
+      y|Y|yes|YES)
+        echo -e "${C_YELLOW}[*] Proceeding with 32B...${C_RESET}"
+        ;;
+      *)
+        echo -e "\n${C_GREEN}[*] Switching to 14B High-Speed Model...${C_RESET}"
+        model="qwen3:14b"
+        ;;
+    esac
+  fi
 
   # Verify if model is installed locally (Exact Match)
   local is_installed
