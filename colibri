@@ -256,6 +256,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
     full_response = []
     token_count = 0
+    first_token = True
     try:
         with urllib.request.urlopen(req) as resp:
             for line in resp:
@@ -264,6 +265,10 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                     chunk = json.loads(line.decode("utf-8"))
                     content = chunk.get("message", {}).get("content", "")
                     if content:
+                        if first_token:
+                            sys.stdout.write("\b" * 26 + " " * 26 + "\b" * 26)
+                            sys.stdout.flush()
+                            first_token = False
                         sys.stdout.write(content)
                         sys.stdout.flush()
                         full_response.append(content)
@@ -309,7 +314,7 @@ def run_chat_session(model_name):
             print(f"{C_YELLOW}✔ Context cleared.{C_RESET}")
             continue
         history.append({"role": "user", "content": prompt})
-        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}", end="", flush=True)
+        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{C_DIM}[Processing on GPU/RAM...] {C_RESET}", end="", flush=True)
         response_text, speed, tokens = stream_chat(model_name, history)
         history.append({"role": "assistant", "content": response_text})
         speed_str = f"{speed:.1f} tok/s" if speed > 0 else ""
