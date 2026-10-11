@@ -242,7 +242,16 @@ C_YELLOW = "\033[38;5;220m"
 C_GRAY = "\033[38;5;244m"
 
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
-    payload = {"model": model_name, "messages": messages, "stream": True, "options": {"temperature": 0.7}}
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": True,
+        "options": {
+            "temperature": 0.7,
+            "num_gpu": 99,
+            "num_ctx": 4096
+        }
+    }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
     full_response = []

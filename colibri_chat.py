@@ -27,7 +27,9 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
         "messages": messages,
         "stream": True,
         "options": {
-            "temperature": 0.7
+            "temperature": 0.7,
+            "num_gpu": 99,
+            "num_ctx": 4096
         }
     }
     data = json.dumps(payload).encode("utf-8")
