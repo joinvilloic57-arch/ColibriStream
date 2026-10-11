@@ -57,9 +57,10 @@ ensure_backend() {
   export OLLAMA_NUM_PARALLEL=1        # Maximize VRAM allocated strictly to the primary active model
   export OLLAMA_KEEP_ALIVE=5m         # Keep warm in GPU memory
   export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on older motherboards
+  export OLLAMA_MAX_PARALLEL_DOWNLOADS=8 # Enable 8 parallel multi-threaded chunks for extreme download speeds
 
   if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo -e "${C_YELLOW}[*] Starting local inference daemon (Universal GPU mode)...${C_RESET}"
+    echo -e "${C_YELLOW}[*] Starting local inference daemon (High-Speed Turbo mode)...${C_RESET}"
     if command -v ollama >/dev/null 2>&1; then
       nohup ollama serve >/dev/null 2>&1 &
       sleep 2
