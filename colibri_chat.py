@@ -58,6 +58,13 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                         return "".join(full_response), speed, eval_count
                 except json.JSONDecodeError:
                     pass
+    except KeyboardInterrupt:
+        print(f"\n{C_DIM}[Generation stopped by user]{C_RESET}")
+        return "".join(full_response), 0, token_count
+    except urllib.error.HTTPError as e:
+        error_msg = e.read().decode("utf-8", errors="ignore")
+        print(f"\n{C_YELLOW}[!] Inference error ({e.code}): {error_msg}{C_RESET}")
+        return "".join(full_response), 0, 0
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
         return "".join(full_response), 0, 0

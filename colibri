@@ -265,6 +265,13 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                         speed = eval_count / eval_dur if eval_dur > 0 else 0
                         return "".join(full_response), speed, eval_count
                 except json.JSONDecodeError: pass
+    except KeyboardInterrupt:
+        print(f"\n{C_DIM}[Generation cancelled by user]{C_RESET}")
+        return "".join(full_response), 0, token_count
+    except urllib.error.HTTPError as e:
+        error_msg = e.read().decode("utf-8", errors="ignore")
+        print(f"\n{C_YELLOW}[!] Inference error ({e.code}): {error_msg}{C_RESET}")
+        return "".join(full_response), 0, 0
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
         return "".join(full_response), 0, 0
@@ -313,9 +320,22 @@ cmd_run() {
     model="qwen2.5-coder:1.5b"
   fi
 
-  local installed
-  installed=$(curl -s http://localhost:11434/api/tags | grep -o "\"name\":\"${model}\"" || true)
-  if [ -z "$installed" ]; then
+  # Verify if model is installed locally
+  local is_installed
+  is_installed=$(python3 -c "
+import urllib.request, json, sys
+m_target = sys.argv[1]
+try:
+    with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3) as resp:
+        tags = json.loads(resp.read().decode()).get('models', [])
+        names = [m.get('name', '') for m in tags]
+        matched = any(m_target == n or (m_target + ':latest') == n or n.startswith(m_target + ':') for n in names)
+        print('1' if matched else '0')
+except Exception:
+    print('0')
+" "$model" 2>/dev/null || echo "0")
+
+  if [ "$is_installed" != "1" ]; then
     echo -e "${C_YELLOW}[!] Model '${model}' not found locally. Auto-downloading...${C_RESET}"
     cmd_pull "$model"
   fi
