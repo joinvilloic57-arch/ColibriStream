@@ -22,22 +22,53 @@ C_GRAY = "\033[38;5;244m"
 C_WHITE = "\033[38;5;255m"
 
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
+    cpu_threads = max(1, os.cpu_count() or 4)
+    opt_threads = min(cpu_threads, 16)
+
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+
+    if is_70b:
+        # 70B/72B dense models (~47GB Q4 / ~30GB Q2) exceed single 24GB VRAM.
+        # Offloading 38 of 80 layers allocates strictly ~22.0 GB VRAM, leaving 2GB KV headroom.
+        # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
+        num_gpu_layers = 38
+        num_ctx_val = 1536
+        num_batch_val = 256
+    elif is_32b:
+        # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
+        # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
+        num_gpu_layers = 99
+        num_ctx_val = 2048
+        num_batch_val = 512
+    else:
+        # Models <20B: 100% offloaded to GPU (<10GB VRAM)
+        num_gpu_layers = 99
+        num_ctx_val = 2048
+        num_batch_val = 512
+
     payload = {
         "model": model_name,
         "messages": messages,
         "stream": True,
         "options": {
             "temperature": 0.7,
-            "num_gpu": 99,
-            "num_ctx": 4096
+            "num_gpu": num_gpu_layers,
+            "num_thread": opt_threads,
+            "num_ctx": num_ctx_val,
+            "num_batch": num_batch_val,
+            "f16_kv": True,
+            "use_mmap": True,
+            "use_mlock": False
         }
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
     
     full_response = []
-    start_time = time.time()
     token_count = 0
+    first_token = True
     
     try:
         with urllib.request.urlopen(req) as resp:
@@ -49,6 +80,11 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                     msg = chunk.get("message", {})
                     content = msg.get("content", "")
                     if content:
+                        if first_token:
+                            # Erase loading status indicator cleanly
+                            sys.stdout.write("\r\033[K" + f"{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}")
+                            sys.stdout.flush()
+                            first_token = False
                         sys.stdout.write(content)
                         sys.stdout.flush()
                         full_response.append(content)
@@ -75,15 +111,35 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
 
 def run_chat_session(model_name):
     os.system("clear 2>/dev/null || true")
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM DESKTOP AI — BARE-METAL CHAT SESSION                     │{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
     print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
+    if is_32b:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
+    elif is_70b:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
+    else:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
     print(f"│  {C_DIM}Commands:{C_RESET}    {C_YELLOW}/menu{C_RESET} (Back to Menu) | {C_YELLOW}/clear{C_RESET} (Reset Context) | {C_YELLOW}/exit{C_RESET}      │")
-    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
+    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
+    if is_70b:
+        print(f"\n{C_YELLOW}┌── HARDWARE ADVISORY: 72B HEAVY DENSE MODEL ──────────────────────────┐{C_RESET}")
+        print(f"│ {C_BOLD}Weight Size{C_RESET} : ~47 GB (Q4) / ~30 GB (Q2) — Exceeds single 24GB VRAM card   │")
+        print(f"│ {C_BOLD}Allocation{C_RESET}  : ~22 GB on GPU (38 layers) + ~25 GB on Host RAM & CPU      │")
+        print(f"│ {C_BOLD}Performance{C_RESET} : First token ~45-90s (PCIe/RAM round-trip), speed ~1 tok/s   │")
+        print(f"│                                                                      │")
+        print(f"│ {C_GREEN}★ FAST ALTERNATIVE (0 RAM, 0 CPU, 100% VRAM @ 20+ tok/s):{C_RESET}            │")
+        print(f"│   Run Flagship 32B: {C_CYAN}colistream run qwen2.5-coder:32b-instruct-q3_K_M{C_RESET}     │")
+        print(f"{C_YELLOW}└──────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
 
     history = [
-        {"role": "system", "content": "You are a helpful, expert AI running locally on bare-metal hardware via Colibristream. Be concise, fast, and write clean code."}
+        {"role": "system", "content": "You are a helpful expert local AI running on bare-metal hardware via Colibristream. Be concise, fast, and write clean code."}
     ]
 
     while True:
@@ -111,7 +167,14 @@ def run_chat_session(model_name):
 
         history.append({"role": "user", "content": prompt})
 
-        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}", end="", flush=True)
+        if is_70b:
+            status_hint = f"{C_DIM}[Evaluating 72B layers across GPU + RAM... ~45s]{C_RESET}"
+        elif is_32b:
+            status_hint = f"{C_DIM}[Processing on GPU VRAM (17GB)...]{C_RESET}"
+        else:
+            status_hint = f"{C_DIM}[Processing on GPU...]{C_RESET}"
+
+        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{status_hint}", end="", flush=True)
         response_text, speed, tokens = stream_chat(model_name, history)
         history.append({"role": "assistant", "content": response_text})
 

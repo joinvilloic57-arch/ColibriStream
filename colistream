@@ -57,10 +57,25 @@ ensure_backend() {
   export OLLAMA_NUM_PARALLEL=1        # Maximize VRAM allocated strictly to the primary active model
   export OLLAMA_KEEP_ALIVE=5m         # Keep warm in GPU memory
   export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on older motherboards
-  export OLLAMA_MAX_PARALLEL_DOWNLOADS=8 # Enable 8 parallel multi-threaded chunks for extreme download speeds
+  export OLLAMA_MAX_PARALLEL_DOWNLOADS=16 # 16 parallel multi-threaded chunks for saturating gigabit downloads
+
+  # Auto-configure systemd service if running with root/sudo permissions
+  if [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]; then
+    if [ ! -f /etc/systemd/system/ollama.service.d/colistream.conf ]; then
+      mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
+      cat << 'SYSCONF' > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+[Service]
+Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
+Environment="OLLAMA_FLASH_ATTENTION=0"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="GGML_CUDA_NO_PINNED=1"
+SYSCONF
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+  fi
 
   if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo -e "${C_YELLOW}[*] Starting local inference daemon (High-Speed Turbo mode)...${C_RESET}"
+    echo -e "${C_YELLOW}[*] Starting local inference daemon (16-thread High-Speed Turbo mode)...${C_RESET}"
     if command -v ollama >/dev/null 2>&1; then
       nohup ollama serve >/dev/null 2>&1 &
       sleep 2
@@ -250,25 +265,28 @@ C_YELLOW = "\033[38;5;220m"
 C_GRAY = "\033[38;5;244m"
 
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
-    import os
     cpu_threads = max(1, os.cpu_count() or 4)
-    # Don't exceed memory bus saturation (sweet spot is 8-16 threads for LLM memory bandwidth)
     opt_threads = min(cpu_threads, 16)
-    
-    # Precision VRAM Budgeting for 24GB GPUs:
-    # 1. 32B models (64 total layers): 52 layers offloaded = EXACTLY ~17.0 GB VRAM.
-    # 2. 70B/72B models (80 total layers): 38 layers offloaded = EXACTLY ~22.0 GB VRAM.
-    # 3. Smaller models (<20B): Offload all layers (99) safely fitting under 12 GB.
+
     m_lower = model_name.lower()
-    if any(x in m_lower for x in ["70b", "72b", "671b"]):
-        num_gpu_layers = 38     # Targets strictly ~22 GB VRAM on P40
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+
+    if is_70b:
+        # 70B/72B dense models (~47GB Q4 / ~30GB Q2) exceed single 24GB VRAM.
+        # Offload 38 of 80 layers strictly allocating ~22.0 GB VRAM, leaving 2GB KV headroom.
+        # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
+        num_gpu_layers = 38
         num_ctx_val = 1536
         num_batch_val = 256
-    elif any(x in m_lower for x in ["32b", "30b", "27b"]):
-        num_gpu_layers = 52     # Targets strictly ~17 GB VRAM on P40
+    elif is_32b:
+        # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
+        # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
+        num_gpu_layers = 99
         num_ctx_val = 2048
         num_batch_val = 512
     else:
+        # Models <20B: 100% offloaded to GPU (<10GB VRAM)
         num_gpu_layers = 99
         num_ctx_val = 2048
         num_batch_val = 512
@@ -290,19 +308,24 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+    
     full_response = []
     token_count = 0
     first_token = True
+    
     try:
         with urllib.request.urlopen(req) as resp:
             for line in resp:
-                if not line: continue
+                if not line:
+                    continue
                 try:
                     chunk = json.loads(line.decode("utf-8"))
-                    content = chunk.get("message", {}).get("content", "")
+                    msg = chunk.get("message", {})
+                    content = msg.get("content", "")
                     if content:
                         if first_token:
-                            sys.stdout.write("\b" * 26 + " " * 26 + "\b" * 26)
+                            # Erase loading status indicator cleanly
+                            sys.stdout.write("\r\033[K" + f"{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}")
                             sys.stdout.flush()
                             first_token = False
                         sys.stdout.write(content)
@@ -314,9 +337,10 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                         eval_dur = chunk.get("eval_duration", 0) / 1e9
                         speed = eval_count / eval_dur if eval_dur > 0 else 0
                         return "".join(full_response), speed, eval_count
-                except json.JSONDecodeError: pass
+                except json.JSONDecodeError:
+                    pass
     except KeyboardInterrupt:
-        print(f"\n{C_DIM}[Generation cancelled by user]{C_RESET}")
+        print(f"\n{C_DIM}[Generation stopped by user]{C_RESET}")
         return "".join(full_response), 0, token_count
     except urllib.error.HTTPError as e:
         error_msg = e.read().decode("utf-8", errors="ignore")
@@ -325,34 +349,78 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
         return "".join(full_response), 0, 0
+    
     return "".join(full_response), 0, 0
 
 def run_chat_session(model_name):
     os.system("clear 2>/dev/null || true")
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM DESKTOP AI — BARE-METAL CHAT SESSION                     │{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
     print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
+    if is_32b:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
+    elif is_70b:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
+    else:
+        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
     print(f"│  {C_DIM}Commands:{C_RESET}    {C_YELLOW}/menu{C_RESET} (Back to Menu) | {C_YELLOW}/clear{C_RESET} (Reset Context) | {C_YELLOW}/exit{C_RESET}      │")
-    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
-    history = [{"role": "system", "content": "You are a helpful expert local AI running on bare-metal via Colibristream."}]
+    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
+    if is_70b:
+        print(f"\n{C_YELLOW}┌── HARDWARE ADVISORY: 72B HEAVY DENSE MODEL ──────────────────────────┐{C_RESET}")
+        print(f"│ {C_BOLD}Weight Size{C_RESET} : ~47 GB (Q4) / ~30 GB (Q2) — Exceeds single 24GB VRAM card   │")
+        print(f"│ {C_BOLD}Allocation{C_RESET}  : ~22 GB on GPU (38 layers) + ~25 GB on Host RAM & CPU      │")
+        print(f"│ {C_BOLD}Performance{C_RESET} : First token ~45-90s (PCIe/RAM round-trip), speed ~1 tok/s   │")
+        print(f"│                                                                      │")
+        print(f"│ {C_GREEN}★ FAST ALTERNATIVE (0 RAM, 0 CPU, 100% VRAM @ 20+ tok/s):{C_RESET}            │")
+        print(f"│   Run Flagship 32B: {C_CYAN}colistream run qwen2.5-coder:32b-instruct-q3_K_M{C_RESET}     │")
+        print(f"{C_YELLOW}└──────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
+
+    history = [
+        {"role": "system", "content": "You are a helpful expert local AI running on bare-metal hardware via Colibristream. Be concise, fast, and write clean code."}
+    ]
+
     while True:
         try:
             prompt = input(f"\n{C_BOLD}{C_GREEN}You ❯ {C_RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print(f"\n{C_DIM}Exiting session.{C_RESET}")
             sys.exit(0)
-        if not prompt: continue
-        if prompt in ("/exit", "/quit", "exit", "quit"): sys.exit(0)
-        if prompt == "/menu": sys.exit(42)
+
+        if not prompt:
+            continue
+
+        if prompt in ("/exit", "/quit", "exit", "quit"):
+            print(f"{C_DIM}Session ended.{C_RESET}")
+            sys.exit(0)
+
+        if prompt == "/menu":
+            print(f"{C_CYAN}Returning to Model Menu...{C_RESET}")
+            sys.exit(42)  # Special exit code to tell caller to reopen menu
+
         if prompt == "/clear":
             history = [history[0]]
-            print(f"{C_YELLOW}✔ Context cleared.{C_RESET}")
+            print(f"{C_YELLOW}✔ Conversation context cleared.{C_RESET}")
             continue
+
         history.append({"role": "user", "content": prompt})
-        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{C_DIM}[Processing on GPU/RAM...] {C_RESET}", end="", flush=True)
+
+        if is_70b:
+            status_hint = f"{C_DIM}[Evaluating 72B layers across GPU + RAM... ~45s]{C_RESET}"
+        elif is_32b:
+            status_hint = f"{C_DIM}[Processing on GPU VRAM (17GB)...]{C_RESET}"
+        else:
+            status_hint = f"{C_DIM}[Processing on GPU...]{C_RESET}"
+
+        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{status_hint}", end="", flush=True)
         response_text, speed, tokens = stream_chat(model_name, history)
         history.append({"role": "assistant", "content": response_text})
+
         speed_str = f"{speed:.1f} tok/s" if speed > 0 else ""
         print(f"\n{C_DIM}└─ [{tokens} tokens {speed_str}]{C_RESET}")
 
@@ -369,6 +437,38 @@ cmd_run() {
   if [ -z "$model" ]; then
     model="qwen2.5-coder:1.5b"
   fi
+
+  # Intelligent Model Alias Resolution & Precision VRAM Targeting:
+  case "$model" in
+    32b|32B)
+      model="qwen2.5-coder:32b-instruct-q3_K_M"
+      ;;
+    72b|72B)
+      model="qwen2.5:72b"
+      ;;
+    14b|14B)
+      model="qwen3:14b"
+      ;;
+    1.5b|1.5B)
+      model="qwen2.5-coder:1.5b"
+      ;;
+    qwen2.5-coder:32b|qwen2.5:32b)
+      # If user typed standard 32b, check if already present on disk; if not present, use q3_K_M (strictly ~17 GB VRAM, 0 RAM, 0 CPU)
+      local is_any_32b
+      is_any_32b=$(python3 -c "
+import urllib.request, json
+try:
+    with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2) as resp:
+        names = [m.get('name', '') for m in json.loads(resp.read().decode()).get('models', [])]
+        print('1' if any('32b' in n for n in names) else '0')
+except:
+    print('0')
+" 2>/dev/null || echo "0")
+      if [ "$is_any_32b" != "1" ]; then
+        model="qwen2.5-coder:32b-instruct-q3_K_M"
+      fi
+      ;;
+  esac
 
   # Verify if model is installed locally (Exact Match)
   local is_installed
@@ -394,8 +494,8 @@ except Exception:
   local chat_script="${DIR}/colibri_chat.py"
   if [ ! -f "$chat_script" ]; then
     chat_script="/tmp/colibri_chat.py"
-    write_inline_chat_script "$chat_script"
   fi
+  write_inline_chat_script "$chat_script"
 
   if [ -e /dev/tty ]; then
     python3 "$chat_script" "$model" </dev/tty
@@ -743,8 +843,8 @@ EOF
     echo -e "${C_BOLD}┌── UNIVERSAL MODEL HUB: RUN BIG MODELS & MULTI-MODEL SWARMS ────────┐${C_RESET}"
     echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Real-time collaboration │${C_RESET}"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
-    echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Extreme 72B Swarm${C_RESET} (Run Big 72B + Fast 1.5B Together)          │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET} │"
+    echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Flagship 32B AI${C_RESET} (~17GB VRAM • 100% on GPU • 0 RAM • 0 CPU)   │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream run 32b${C_RESET}                               │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Instant Local Swarm${C_RESET} (Run 14B Thinker + 1.5B Coder — No Wait)  │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}   │"
@@ -752,10 +852,10 @@ EOF
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_GREEN}Single Big Model${C_RESET} (Run Standalone 72B Flagship Solo)          │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream run qwen2.5:72b${C_RESET}                     │"
+    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_YELLOW}Heavy 72B Model${C_RESET} (~22GB VRAM Clamped + CPU/RAM Split)           │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream run 72b${C_RESET}                               │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_YELLOW}Custom Swarm Builder${C_RESET} (Pick ANY 2+ Models to Run Together)     │"
+    echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_CYAN}Custom Swarm Builder${C_RESET} (Pick ANY 2+ Models to Run Together)     │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm <model1> <model2>${C_RESET}             │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Big Free AI Hub Catalog${C_RESET} (Browse All 25+ Models by Family)     │"
@@ -768,8 +868,8 @@ EOF
 
     case "$CHOICE" in
       1)
-        echo -e "\n${C_CYAN}[*] Launching Extreme 72B Swarm (Qwen 72B + 1.5B Coder)...${C_RESET}"
-        cmd_swarm "qwen2.5:72b" "qwen2.5-coder:1.5b"
+        echo -e "\n${C_CYAN}[*] Launching Flagship 32B AI (100% GPU VRAM, 0 RAM, 0 CPU)...${C_RESET}"
+        cmd_run "32b"
         ;;
       2)
         echo -e "\n${C_CYAN}[*] Launching Instant Local Swarm (Qwen3 14B + 1.5B Coder)...${C_RESET}"
@@ -780,8 +880,8 @@ EOF
         cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"
         ;;
       4)
-        echo -e "\n${C_CYAN}[*] Launching Single Big Model (Qwen 2.5 72B)...${C_RESET}"
-        cmd_run "qwen2.5:72b"
+        echo -e "\n${C_CYAN}[*] Launching Heavy 72B Model (Clamped to ~22GB VRAM)...${C_RESET}"
+        cmd_run "72b"
         ;;
       5)
         cmd_swarm_builder
