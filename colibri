@@ -347,10 +347,16 @@ except Exception:
     write_inline_chat_script "$chat_script"
   fi
 
-  python3 "$chat_script" "$model"
+  if [ -e /dev/tty ]; then
+    python3 "$chat_script" "$model" </dev/tty
+  else
+    python3 "$chat_script" "$model"
+  fi
   local ret=$?
   if [ $ret -eq 42 ]; then
     cmd_loop_menu
+  else
+    exit 0
   fi
 }
 
