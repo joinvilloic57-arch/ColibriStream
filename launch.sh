@@ -320,23 +320,24 @@ cmd_run() {
     model="qwen2.5-coder:1.5b"
   fi
 
-  # Verify if model is installed locally
+  # Verify if model is installed locally (Exact Match)
   local is_installed
   is_installed=$(python3 -c "
 import urllib.request, json, sys
 m_target = sys.argv[1]
+exact_target = m_target if ':' in m_target else m_target + ':latest'
 try:
     with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3) as resp:
         tags = json.loads(resp.read().decode()).get('models', [])
         names = [m.get('name', '') for m in tags]
-        matched = any(m_target == n or (m_target + ':latest') == n or n.startswith(m_target + ':') for n in names)
+        matched = exact_target in names
         print('1' if matched else '0')
 except Exception:
     print('0')
 " "$model" 2>/dev/null || echo "0")
 
   if [ "$is_installed" != "1" ]; then
-    echo -e "${C_YELLOW}[!] Model '${model}' not found locally. Auto-downloading...${C_RESET}"
+    echo -e "\n${C_YELLOW}[!] Model '${model}' not found locally on disk. Auto-downloading now...${C_RESET}"
     cmd_pull "$model"
   fi
 
@@ -633,18 +634,7 @@ cmd_big_catalog() {
         ;;
     esac
 
-    echo -e "\n${C_GREEN}${C_BOLD}Selected Model:${C_RESET} ${C_BOLD}${TARGET_MODEL}${C_RESET}"
-    echo -e "${C_YELLOW}Direct Command to run anytime:${C_RESET}"
-    echo -e "  ${C_BOLD}${C_WHITE}colistream run ${TARGET_MODEL}${C_RESET}\n"
-
-    read_input "${C_BOLD}Press Enter to boot chat, 'b' for catalog, or 'q' to Quit [Enter/b/q]: ${C_RESET}" ACTION
-    if [ "$ACTION" = "b" ] || [ "$ACTION" = "B" ]; then
-      continue
-    fi
-    if [ "$ACTION" = "q" ] || [ "$ACTION" = "Q" ] || [ "$ACTION" = "exit" ] || [ "$ACTION" = "quit" ]; then
-      echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
-      exit 0
-    fi
+    echo -e "\n${C_GREEN}${C_BOLD}[*] Launching Selected Model:${C_RESET} ${C_BOLD}${TARGET_MODEL}${C_RESET}..."
     cmd_run "$TARGET_MODEL"
     break
   done
