@@ -151,16 +151,27 @@
       Zero cloud. Zero subscriptions. <span class="highlight">100% private</span> on your machine.
     </div>
 
-    <!-- The Launcher Box -->
+    <!-- Step 1: Install Colistream -->
+    <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; color: #00ff88; font-weight: 700; margin-bottom: 6px;">1. Install Colistream</div>
     <div class="command-box">
       <div class="command-text" id="cmdText">
         <span class="prompt-sym">$</span>
         <span>curl -fsSL https://colibristream.run | bash</span>
       </div>
-      <button class="copy-btn" id="copyBtn" onclick="copyCommand()">Copy</button>
+      <button class="copy-btn" id="copyBtn" onclick="copyCommand('cmdText', 'copyBtn')">Copy</button>
     </div>
 
-    <p class="caption">Paste into your terminal to launch</p>
+    <!-- Step 2: Run Any Model -->
+    <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin: 18px 0 6px 0;">2. Run Big Models or Swarms</div>
+    <div class="command-box">
+      <div class="command-text" id="runCmdText">
+        <span class="prompt-sym" style="color: #38bdf8;">$</span>
+        <span>colistream run qwen2.5:72b</span>
+      </div>
+      <button class="copy-btn" id="copyRunBtn" style="background: #38bdf8;" onclick="copyCustom('colistream run qwen2.5:72b', 'copyRunBtn')">Copy</button>
+    </div>
+
+    <p class="caption">Paste into any terminal to install and launch</p>
   </div>
 
   <script>
@@ -191,6 +202,19 @@
         setTimeout(() => {
           btn.innerText = "Copy";
           btn.style.background = "#00ff88";
+        }, 1800);
+      });
+    }
+
+    function copyCustom(text, btnId) {
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById(btnId);
+        const origText = btn.innerText;
+        btn.innerText = "Copied!";
+        btn.style.background = "#ffffff";
+        setTimeout(() => {
+          btn.innerText = origText;
+          btn.style.background = "#38bdf8";
         }, 1800);
       });
     }
