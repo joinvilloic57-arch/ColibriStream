@@ -254,11 +254,23 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     # Don't exceed memory bus saturation (sweet spot is 8-16 threads for LLM memory bandwidth)
     opt_threads = min(cpu_threads, 16)
     
-    # Smart layer offloading: For 70B-72B models, offload 32 layers to GPU (~19GB)
-    # leaving 5GB safety headroom for CUDA KV-cache allocations so cudaMalloc never fails.
-    is_massive = any(x in model_name.lower() for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 32 if is_massive else 99
-    num_ctx_val = 1536 if is_massive else 2048
+    # Precision VRAM Budgeting for 24GB GPUs:
+    # 1. 32B models (64 total layers): 52 layers offloaded = EXACTLY ~17.0 GB VRAM.
+    # 2. 70B/72B models (80 total layers): 38 layers offloaded = EXACTLY ~22.0 GB VRAM.
+    # 3. Smaller models (<20B): Offload all layers (99) safely fitting under 12 GB.
+    m_lower = model_name.lower()
+    if any(x in m_lower for x in ["70b", "72b", "671b"]):
+        num_gpu_layers = 38     # Targets strictly ~22 GB VRAM on P40
+        num_ctx_val = 1536
+        num_batch_val = 256
+    elif any(x in m_lower for x in ["32b", "30b", "27b"]):
+        num_gpu_layers = 52     # Targets strictly ~17 GB VRAM on P40
+        num_ctx_val = 2048
+        num_batch_val = 512
+    else:
+        num_gpu_layers = 99
+        num_ctx_val = 2048
+        num_batch_val = 512
 
     payload = {
         "model": model_name,
@@ -269,7 +281,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
             "num_gpu": num_gpu_layers,
             "num_thread": opt_threads,
             "num_ctx": num_ctx_val,
-            "num_batch": 256 if is_massive else 512,
+            "num_batch": num_batch_val,
             "f16_kv": True,
             "use_mmap": True,
             "use_mlock": False
