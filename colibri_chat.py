@@ -21,7 +21,77 @@ C_PURPLE = "\033[38;5;141m"
 C_GRAY = "\033[38;5;244m"
 C_WHITE = "\033[38;5;255m"
 
+def resolve_model_name(name):
+    if not name:
+        return "qwen2.5-coder:1.5b"
+    n = name.strip()
+    nl = n.lower()
+    if nl in ("32b", "32", "32b-coder", "qwen-32b", "qwen2.5-32b"):
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as resp:
+                tags = json.loads(resp.read().decode("utf-8")).get("models", [])
+                names = [m.get("name", "") for m in tags]
+                for cand in ["qwen2.5-coder:32b-instruct-q3_K_M", "qwen2.5-coder:32b", "qwen2.5:32b"]:
+                    if any(cand in x for x in names):
+                        return cand
+        except Exception:
+            pass
+        return "qwen2.5-coder:32b-instruct-q3_K_M"
+    if nl in ("72b", "72", "qwen-72b", "qwen2.5-72b"):
+        return "qwen2.5:72b"
+    if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
+        return "qwen3:14b"
+    if nl in ("1.5b", "1.5", "qwen-1.5b"):
+        return "qwen2.5-coder:1.5b"
+    if nl in ("7b", "7", "qwen-7b"):
+        return "qwen2.5-coder:7b"
+    return n
+
+def ensure_model_installed(model_name):
+    exact_target = model_name if ":" in model_name else model_name + ":latest"
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as resp:
+            tags = json.loads(resp.read().decode("utf-8")).get("models", [])
+            names = [m.get("name", "") for m in tags]
+            if any(exact_target == n or exact_target in n for n in names):
+                return True
+    except Exception:
+        return False
+
+    print(f"\n{C_YELLOW}[!] Model '{model_name}' not found locally. Auto-downloading now...{C_RESET}")
+    url = "http://localhost:11434/api/pull"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"name": model_name, "stream": True}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                data = json.loads(line.decode("utf-8"))
+                status = data.get("status", "")
+                total = data.get("total", 0)
+                completed = data.get("completed", 0)
+                if total > 0:
+                    pct = int((completed / total) * 100)
+                    gb_done = completed / (1024**3)
+                    gb_tot = total / (1024**3)
+                    bar_len = 25
+                    filled = int(bar_len * completed // total)
+                    bar = "█" * filled + "░" * (bar_len - filled)
+                    sys.stdout.write(f"\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) - \033[38;5;45m{status:<22}\033[0m")
+                    sys.stdout.flush()
+                if status == "success":
+                    sys.stdout.write("\r\033[K")
+                    print(f"\033[38;5;48m\033[1m✔ Model {model_name} downloaded & verified on disk!\033[0m")
+                    return True
+    except Exception as e:
+        print(f"\n{C_YELLOW}[!] Download warning: {e}{C_RESET}")
+        return False
+    return True
+
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
+    model_name = resolve_model_name(model_name)
     cpu_threads = max(1, os.cpu_count() or 4)
     opt_threads = min(cpu_threads, 16)
 
@@ -110,6 +180,8 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     return "".join(full_response), 0, 0
 
 def run_chat_session(model_name):
+    model_name = resolve_model_name(model_name)
+    ensure_model_installed(model_name)
     os.system("clear 2>/dev/null || true")
     m_lower = model_name.lower()
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
