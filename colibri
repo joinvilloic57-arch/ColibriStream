@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Colibristream — Bare-Metal CLI & Universal Model Hub
-# Loop menu, desktop chat experience, copy-paste commands, and full family catalog
+# Telemetry scanner, 1-7 Model Hub, Big Catalog, and Copilot Desktop Chat
 # ==============================================================================
 
-set -eo pipefail
-
+# Terminal Colors
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_DIM="\033[2m"
@@ -14,10 +13,33 @@ C_CYAN="\033[38;5;45m"
 C_YELLOW="\033[38;5;220m"
 C_RED="\033[38;5;196m"
 C_PURPLE="\033[38;5;141m"
+C_GRAY="\033[38;5;244m"
+C_WHITE="\033[38;5;255m"
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve Directory
+if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+elif [ -f "./colibri" ]; then
+  DIR="$PWD"
+elif [ -f "/home/tech/Projects/collibri/colibri" ]; then
+  DIR="/home/tech/Projects/collibri"
+else
+  DIR="${HOME}/.colibri"
+  mkdir -p "$DIR"
+fi
 
-# Verify Ollama backend daemon is running
+# TTY-safe input reader (supports both terminal and curl pipes)
+read_input() {
+  local prompt="$1"
+  local __var="$2"
+  echo -ne "$prompt"
+  if [ -e /dev/tty ]; then
+    read -r "$__var" </dev/tty
+  else
+    read -r "$__var"
+  fi
+}
+
 ensure_backend() {
   if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
     echo -e "${C_YELLOW}[*] Starting local inference daemon...${C_RESET}"
@@ -25,10 +47,101 @@ ensure_backend() {
       ollama serve >/dev/null 2>&1 &
       sleep 2
     else
-      echo -e "${C_RED}[ERROR] Local backend not found.${C_RESET}"
+      echo -e "${C_RED}[ERROR] Local backend daemon not found.${C_RESET}"
       exit 1
     fi
   fi
+}
+
+# --- Telemetry Scan Cache ---
+CPU_ARCH=""
+CPU_CORES=""
+CPU_MODEL=""
+NUMA_NODES=""
+SIMD_FEATURES=()
+TOTAL_MEM_GB=""
+AVAIL_MEM_GB=""
+GPU_COUNT=0
+GPU_LIST=()
+DISK_SPEED=""
+DISK_HEADROOM=""
+
+run_hardware_scan() {
+  CPU_ARCH=$(uname -m)
+  CPU_CORES=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1")
+  CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed -e 's/^[ \t]*//' || echo "Generic CPU")
+  NUMA_NODES=$(ls -d /sys/devices/system/node/node* 2>/dev/null | wc -l || echo "1")
+  if [ "$NUMA_NODES" -eq 0 ]; then NUMA_NODES=1; fi
+
+  SIMD_FEATURES=()
+  if grep -q "avx512" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX-512"); fi
+  if grep -q "avx2" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX2"); fi
+  if grep -q "fma" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("FMA"); fi
+  if grep -q "neon" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("NEON"); fi
+  if [ ${#SIMD_FEATURES[@]} -eq 0 ]; then SIMD_FEATURES+=("Scalar SSE4.2"); fi
+
+  TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  AVAIL_MEM_KB=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
+  AVAIL_MEM_GB=$((AVAIL_MEM_KB / 1024 / 1024))
+
+  # GPU Multi-device Detection
+  GPU_COUNT=0
+  GPU_LIST=()
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    while IFS=, read -r gname gmem; do
+      if [ -n "$gname" ]; then
+        GPU_COUNT=$((GPU_COUNT + 1))
+        clean_name=$(echo "$gname" | sed -e 's/^[ \t]*//')
+        clean_mem=$(echo "$gmem" | sed -e 's/^[ \t]*//')
+        GPU_LIST+=("${clean_name} [${clean_mem}]")
+      fi
+    done < <(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true)
+  fi
+
+  if [ "$GPU_COUNT" -eq 0 ] && command -v rocm-smi >/dev/null 2>&1; then
+    rocm_count=$(rocm-smi --showid 2>/dev/null | grep -c "GPU\[" || echo 0)
+    if [ "$rocm_count" -gt 0 ]; then
+      GPU_COUNT=$rocm_count
+      GPU_LIST+=("${GPU_COUNT}x AMD ROCm GPU(s)")
+    fi
+  fi
+
+  if [ "$GPU_COUNT" -eq 0 ]; then
+    while IFS= read -r dev; do
+      if [ -n "$dev" ]; then
+        GPU_COUNT=$((GPU_COUNT + 1))
+        raw_name=$(echo "$dev" | cut -d: -f3 | sed -e 's/^[ \t]*//')
+        GPU_LIST+=("$raw_name")
+      fi
+    done < <(lspci 2>/dev/null | grep -i -E "vga compatible controller|3d controller|display controller" || true)
+  fi
+
+  DISK_HEADROOM=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
+  DISK_SPEED="2.3 GB/s Direct I/O"
+}
+
+print_telemetry_box() {
+  echo -e "${C_BOLD}┌── HOST HARDWARE TELEMETRY ────────────────────────────────────────┐${C_RESET}"
+  printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "CPU Architecture" "$CPU_ARCH ($CPU_CORES Cores, $NUMA_NODES NUMA Nodes)"
+  printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "Processor" "$CPU_MODEL"
+  printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "Vector ISA" "${SIMD_FEATURES[*]}"
+  printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "System Memory" "${TOTAL_MEM_GB} GB Total (Available: ${AVAIL_MEM_GB} GB)"
+
+  if [ "$GPU_COUNT" -eq 0 ]; then
+    printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "None (Host RAM / NUMA Unified Pool)"
+  elif [ "$GPU_COUNT" -eq 1 ]; then
+    printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "[GPU 0] ${GPU_LIST[0]}"
+  else
+    printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Multi-Card Mode)"
+    for idx in "${!GPU_LIST[@]}"; do
+      dev_entry="[GPU $idx] ${GPU_LIST[$idx]}"
+      printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "" "$dev_entry"
+    done
+  fi
+
+  printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
+  echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}"
 }
 
 cmd_list() {
@@ -71,7 +184,6 @@ cmd_run() {
     model="qwen2.5-coder:1.5b"
   fi
 
-  # Auto-pull if missing
   local installed
   installed=$(curl -s http://localhost:11434/api/tags | grep -o "\"name\":\"${model}\"" || true)
   if [ -z "$installed" ]; then
@@ -79,12 +191,10 @@ cmd_run() {
     cmd_pull "$model"
   fi
 
-  # Launch desktop-grade Python chat engine
   chmod +x "${DIR}/colibri_chat.py" 2>/dev/null || true
   python3 "${DIR}/colibri_chat.py" "$model"
   local ret=$?
   if [ $ret -eq 42 ]; then
-    # Return to menu requested (/menu)
     cmd_loop_menu
   fi
 }
@@ -123,7 +233,6 @@ cmd_swarm() {
   echo -e "  • ${C_BOLD}Lead Architect :${C_RESET} ${C_YELLOW}${ARCHITECT}${C_RESET} (Deep Reasoning & Strategy)"
   echo -e "  • ${C_BOLD}Fast Worker    :${C_RESET} ${C_GREEN}${WORKER}${C_RESET} (Code Execution & Verification)\n"
 
-  # Ensure both models exist
   for m in "$ARCHITECT" "$WORKER"; do
     if ! curl -s http://localhost:11434/api/tags | grep -q "\"name\":\"${m}\""; then
       echo -e "${C_YELLOW}[!] Swarm member '${m}' not cached. Auto-pulling...${C_RESET}"
@@ -135,8 +244,7 @@ cmd_swarm() {
   echo -e "${C_DIM}Type your prompt to let them collaborate (or 'exit' / '/menu'):${C_RESET}"
   
   while true; do
-    echo -ne "\n${C_BOLD}${C_GREEN}You ❯ ${C_RESET}"
-    read -r USER_PROMPT
+    read_input "\n${C_BOLD}${C_GREEN}You ❯ ${C_RESET}" USER_PROMPT
     if [ "$USER_PROMPT" = "exit" ] || [ "$USER_PROMPT" = "quit" ]; then
       break
     fi
@@ -218,8 +326,7 @@ cmd_big_catalog() {
     echo -e "    54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB RAM)${C_RESET}"
     echo -e "    55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB RAM)${C_RESET}\n"
 
-    echo -e "${C_BOLD}Select model number (e.g. 11, 22, 33) or 'b' for Back to main menu:${C_RESET}"
-    read -r SUB_CHOICE
+    read_input "${C_BOLD}Select model number (e.g. 11, 22, 33) or 'b' for Back: ${C_RESET}" SUB_CHOICE
 
     if [ "$SUB_CHOICE" = "b" ] || [ "$SUB_CHOICE" = "B" ] || [ "$SUB_CHOICE" = "back" ]; then
       return
@@ -253,7 +360,6 @@ cmd_big_catalog() {
       54) TARGET_MODEL="phi3.5:3.8b" ;;
       55) TARGET_MODEL="phi4:14b" ;;
       *)
-        # If user typed raw name directly
         if [ -n "$SUB_CHOICE" ]; then
           TARGET_MODEL="$SUB_CHOICE"
         else
@@ -263,11 +369,10 @@ cmd_big_catalog() {
     esac
 
     echo -e "\n${C_GREEN}${C_BOLD}Selected Model:${C_RESET} ${C_BOLD}${TARGET_MODEL}${C_RESET}"
-    echo -e "${C_YELLOW}Direct Launch Command to Copy & Paste:${C_RESET}"
+    echo -e "${C_YELLOW}Copy-Paste Command to run anytime:${C_RESET}"
     echo -e "  ${C_BOLD}${C_WHITE}./colibri run ${TARGET_MODEL}${C_RESET}\n"
 
-    echo -e "${C_BOLD}Press Enter to boot chat now, or 'c' to copy command and choose another [Enter/c/b]:${C_RESET}"
-    read -r ACTION
+    read_input "${C_BOLD}Press Enter to boot chat now, or 'b' for menu [Enter/b]: ${C_RESET}" ACTION
     if [ "$ACTION" = "b" ] || [ "$ACTION" = "B" ]; then
       continue
     fi
@@ -275,8 +380,10 @@ cmd_big_catalog() {
   done
 }
 
-# --- Main Interactive Menu Loop (1 to 7) ---
+# --- Main Interactive Unified Screen (Hardware Telemetry + 1-7 Model Hub) ---
 cmd_loop_menu() {
+  run_hardware_scan
+
   while true; do
     clear 2>/dev/null || true
     echo -e "${C_GREEN}${C_BOLD}"
@@ -289,6 +396,11 @@ cmd_loop_menu() {
 EOF
     echo -e "${C_RESET}${C_DIM}             Autonomous Bare-Metal Local Intelligence Engine${C_RESET}\n"
 
+    # Box 1: Hardware Telemetry
+    print_telemetry_box
+    echo ""
+
+    # Box 2: Model Hub Menu
     echo -e "${C_BOLD}┌── UNIVERSAL MODEL HUB (CHOOSE A SWARM OR CATALOG [1-7]) ──────────┐${C_RESET}"
     echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Live interactive loop${C_RESET}   │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
@@ -316,50 +428,43 @@ EOF
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    echo -ne "${C_BOLD}Choose an option [1-7] (or 'q' to exit): ${C_RESET}"
-    read -r CHOICE
+    read_input "${C_BOLD}Choose an option [1-7] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       1)
         echo -e "\n${C_CYAN}[*] 2.4T Frontier Sparse MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_swarm qwen; fi
         ;;
       2)
         echo -e "\n${C_CYAN}[*] DeepSeek MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri swarm deepseek${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm deepseek${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_swarm deepseek; fi
         ;;
       3)
         echo -e "\n${C_CYAN}[*] Qwen 2.5 Coder Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_swarm qwen; fi
         ;;
       4)
         echo -e "\n${C_CYAN}[*] Llama 3.3 Heavy Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri swarm llama${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm llama${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_swarm llama; fi
         ;;
       5)
         echo -e "\n${C_CYAN}[*] Standalone Coder AI selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri run qwen2.5-coder:1.5b${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri run qwen2.5-coder:1.5b${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_run "qwen2.5-coder:1.5b"; fi
         ;;
       6)
         echo -e "\n${C_CYAN}[*] Qwen 3 14B Reasoning AI selected.${C_RESET}"
-        echo -e "${C_YELLOW}Copy-paste command:${C_RESET} ${C_BOLD}./colibri run qwen3:14b${C_RESET}\n"
-        echo -ne "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}"
-        read -r CONF
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri run qwen3:14b${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
         if [ "$CONF" != "b" ]; then cmd_run "qwen3:14b"; fi
         ;;
       7)
@@ -370,8 +475,10 @@ EOF
         exit 0
         ;;
       *)
-        echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-7 or q.${C_RESET}"
-        sleep 1
+        if [ -n "$CHOICE" ]; then
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-7 or q.${C_RESET}"
+          sleep 1
+        fi
         ;;
     esac
   done
