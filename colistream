@@ -366,12 +366,7 @@ except Exception:
   else
     python3 "$chat_script" "$model"
   fi
-  local ret=$?
-  if [ $ret -eq 42 ]; then
-    cmd_loop_menu
-  else
-    exit 0
-  fi
+  cmd_loop_menu
 }
 
 cmd_swarm() {
