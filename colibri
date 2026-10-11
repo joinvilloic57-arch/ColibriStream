@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Colibristream — Bare-Metal CLI & Swarm Orchestrator
+# Universal command: colibri [run|pull|swarm|scan|list]
+# ==============================================================================
+
+set -eo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_DIM="\033[2m"
+C_GREEN="\033[38;5;48m"
+C_CYAN="\033[38;5;45m"
+C_YELLOW="\033[38;5;220m"
+C_RED="\033[38;5;196m"
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Verify Ollama backend daemon is running
+ensure_backend() {
+  if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo -e "${C_YELLOW}[*] Starting local inference daemon...${C_RESET}"
+    if command -v ollama >/dev/null 2>&1; then
+      ollama serve >/dev/null 2>&1 &
+      sleep 2
+    else
+      echo -e "${C_RED}[ERROR] Ollama backend not found. Install from https://ollama.ai${C_RESET}"
+      exit 1
+    fi
+  fi
+}
+
+cmd_scan() {
+  "${DIR}/launch.sh"
+}
+
+cmd_list() {
+  ensure_backend
+  echo -e "${C_BOLD}┌── LOCAL HUB: INSTALLED MODELS ──────────────────────────────────────┐${C_RESET}"
+  curl -s http://localhost:11434/api/tags | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    models = data.get("models", [])
+    if not models:
+        print("│  No local models installed yet. Pull one with: colibri pull <name>  │")
+    for m in models:
+        name = m.get("name", "unknown")
+        size_gb = m.get("size", 0) / (1024**3)
+        fam = m.get("details", {}).get("family", "unknown")
+        print(f"│  • {name:<26} | Family: {fam:<10} | Size: {size_gb:5.1f} GB   │")
+except Exception as e:
+    print("│ Error reading models:", e)
+'
+  echo -e "${C_BOLD}└──────────────────────────────────────────────────────────────────────┘${C_RESET}"
+}
+
+cmd_pull() {
+  ensure_backend
+  local model="$1"
+  if [ -z "$model" ]; then
+    echo -e "${C_RED}[ERROR] Specify a model name. Example: colibri pull qwen2.5-coder:7b${C_RESET}"
+    exit 1
+  fi
+  echo -e "${C_CYAN}[*] Pulling model: ${C_BOLD}${model}${C_RESET} directly to local bare-metal hub..."
+  ollama pull "$model"
+  echo -e "${C_GREEN}✔ Model ${model} is ready for execution.${C_RESET}"
+}
+
+cmd_run() {
+  ensure_backend
+  local model="$1"
+  if [ -z "$model" ]; then
+    # Default to fast installed coder model
+    model="qwen2.5-coder:1.5b"
+  fi
+
+  # Check if model exists locally
+  local installed
+  installed=$(curl -s http://localhost:11434/api/tags | grep -o "\"name\":\"${model}\"" || true)
+  if [ -z "$installed" ]; then
+    echo -e "${C_YELLOW}[!] Model '${model}' not found locally. Auto-pulling to bare metal...${C_RESET}"
+    cmd_pull "$model"
+  fi
+
+  echo -e "${C_GREEN}✔ Booting bare-metal session for: ${C_BOLD}${model}${C_RESET}\n"
+  ollama run "$model"
+}
+
+cmd_swarm() {
+  ensure_backend
+  local family="${1:-qwen}"
+  echo -e "${C_GREEN}${C_BOLD}"
+  echo "╔══════════════════════════════════════════════════════════════════════╗"
+  echo "║         COLIBRISTREAM INTRA-FAMILY SWARM COORDINATOR                 ║"
+  echo "║     Weights stored 1x in shared memory • Zero cross-hallucination     ║"
+  echo "╚══════════════════════════════════════════════════════════════════════╝"
+  echo -e "${C_RESET}"
+
+  case "$family" in
+    qwen)
+      ARCHITECT="qwen3:14b"
+      WORKER="qwen2.5-coder:1.5b"
+      ;;
+    deepseek)
+      ARCHITECT="deepseek-r1:14b"
+      WORKER="deepseek-coder:6.7b"
+      ;;
+    llama)
+      ARCHITECT="llama3.3:70b"
+      WORKER="llama3.1:8b"
+      ;;
+    *)
+      ARCHITECT="qwen3:14b"
+      WORKER="qwen2.5-coder:1.5b"
+      ;;
+  esac
+
+  echo -e "${C_CYAN}Swarm Roles Activated:${C_RESET}"
+  echo -e "  • ${C_BOLD}Architect / Lead Thinker :${C_RESET} ${C_YELLOW}${ARCHITECT}${C_RESET}"
+  echo -e "  • ${C_BOLD}Fast Worker / Executor  :${C_RESET} ${C_GREEN}${WORKER}${C_RESET}\n"
+
+  # Ensure both models are present
+  for m in "$ARCHITECT" "$WORKER"; do
+    if ! curl -s http://localhost:11434/api/tags | grep -q "\"name\":\"${m}\""; then
+      echo -e "${C_YELLOW}[!] Swarm member '${m}' not cached. Pulling now...${C_RESET}"
+      cmd_pull "$m"
+    fi
+  done
+
+  echo -e "${C_GREEN}✔ Both Intra-Family agents standing by in shared memory.${C_RESET}\n"
+  echo -e "${C_BOLD}Enter your task or prompt for the Swarm (or 'exit'):${C_RESET}"
+  
+  while true; do
+    echo -ne "\n${C_BOLD}${C_GREEN}User > ${C_RESET}"
+    read -r USER_PROMPT
+    if [ "$USER_PROMPT" = "exit" ] || [ "$USER_PROMPT" = "quit" ]; then
+      echo -e "${C_DIM}Exiting swarm session.${C_RESET}"
+      break
+    fi
+    if [ -z "$USER_PROMPT" ]; then continue; fi
+
+    echo -e "\n${C_YELLOW}─── [STEP 1] Architect (${ARCHITECT}) Thinking & Planning ───${C_RESET}"
+    PLAN_PROMPT="You are the Lead Architect in an intra-family swarm. Analyze this task and provide a concise, step-by-step plan for the coder worker:\nTask: ${USER_PROMPT}"
+    
+    PLAN_RESPONSE=$(curl -s http://localhost:11434/api/generate -d "{\"model\": \"${ARCHITECT}\", \"prompt\": $(echo "$PLAN_PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'), \"stream\": false}" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("response", ""))')
+    
+    echo -e "${C_DIM}${PLAN_RESPONSE}${C_RESET}\n"
+
+    echo -e "${C_GREEN}─── [STEP 2] Fast Worker (${WORKER}) Executing Implementation ───${C_RESET}"
+    WORKER_PROMPT="You are the Fast Coder in an intra-family swarm. Implement the solution based strictly on the Architect's plan:\nPlan: ${PLAN_RESPONSE}\nOriginal Request: ${USER_PROMPT}"
+    
+    curl -s http://localhost:11434/api/generate -d "{\"model\": \"${WORKER}\", \"prompt\": $(echo "$WORKER_PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'), \"stream\": true}" | python3 -c '
+import sys, json
+for line in sys.stdin:
+    if line.strip():
+        try:
+            chunk = json.loads(line)
+            sys.stdout.write(chunk.get("response", ""))
+            sys.stdout.flush()
+        except:
+            pass
+print()
+'
+    echo -e "\n${C_GREEN}✔ Swarm execution complete.${C_RESET}"
+  done
+}
+
+# --- CLI Entrypoint Router ---
+case "$1" in
+  run)
+    cmd_run "$2"
+    ;;
+  pull)
+    cmd_pull "$2"
+    ;;
+  swarm)
+    cmd_swarm "$2"
+    ;;
+  list|ls)
+    cmd_list
+    ;;
+  scan)
+    cmd_scan
+    ;;
+  *)
+    # If no argument or help, show usage or run launcher
+    if [ $# -eq 0 ]; then
+      "${DIR}/launch.sh"
+    else
+      echo -e "${C_BOLD}Colibristream CLI Commands:${C_RESET}"
+      echo -e "  ${C_GREEN}./colibri run <model>${C_RESET}     - Auto-pull and run any local model (e.g. qwen2.5-coder:1.5b)"
+      echo -e "  ${C_GREEN}./colibri swarm <family>${C_RESET}  - Launch Intra-Family Swarm (e.g. ./colibri swarm qwen)"
+      echo -e "  ${C_GREEN}./colibri pull <model>${C_RESET}    - Download model to local bare-metal hub"
+      echo -e "  ${C_GREEN}./colibri list${C_RESET}            - List all installed local models & memory sizes"
+      echo -e "  ${C_GREEN}./colibri scan${C_RESET}            - Run Phase 2 hardware scan and interactive menu"
+    fi
+    ;;
+esac

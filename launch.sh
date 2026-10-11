@@ -215,4 +215,25 @@ else
   echo -e "${C_DIM}• System safety guardrail active: Host OS has ${AVAIL_MEM_GB} GB headroom.${C_RESET}"
 fi
 
-echo -e "\n${C_GREEN}${C_BOLD}[READY] Swarm pipeline standing by.${C_RESET}"
+echo -e "\n${C_GREEN}${C_BOLD}[READY] Launching live session...${C_RESET}\n"
+
+case "$CHOICE" in
+  1|3)
+    exec "${DIR}/colibri" swarm qwen
+    ;;
+  2)
+    exec "${DIR}/colibri" swarm deepseek
+    ;;
+  4)
+    exec "${DIR}/colibri" swarm llama
+    ;;
+  6)
+    exec "${DIR}/colibri" run qwen2.5-coder:1.5b
+    ;;
+  7)
+    exec "${DIR}/colibri" run "${CUSTOM_INPUT:-qwen2.5-coder:1.5b}"
+    ;;
+  *)
+    exec "${DIR}/colibri" swarm qwen
+    ;;
+esac
