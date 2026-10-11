@@ -167,6 +167,33 @@ Colibristream delivers a curated catalog of open-weight models, categorized side
 +-----------------------------+------------------------------------+-------------------------+--------------------+
 ```
 
+#### Intra-Family Multi-Agent Swarm (Same-Family Dialogue)
+To enable collaborative intelligence without cross-model hallucinations, Colibristream starts with **Intra-Family Agent Communication** (models converse strictly with siblings in the same model lineage):
+
+```
+       ┌────────────────────────────────────────────────────────┐
+       │             INTRA-FAMILY COMMUNICATION LOOP            │
+       │                                                        │
+       │  ┌───────────────────────┐    Prompt     ┌──────────┐  │
+       │  │ Large Family Member   │ ────────────► │ Small    │  │
+       │  │ (Architect / Critic)  │ ◄──────────── │ Sibling  │  │
+       │  │ e.g. Qwen 2.5 32B     │   Execution   │ (Worker) │  │
+       │  └───────────────────────┘               │ Qwen 7B  │  │
+       │                                          └──────────┘  │
+       └────────────────────────────────────────────────────────┘
+```
+
+* **Why Same-Family Only First?**:
+  1. **Shared Tokenizer & Special Tokens**: Sibling models (e.g. Qwen-to-Qwen) share the exact same vocabulary, token IDs, and chat templates (`<|im_start|>`, `<|im_end|>`). No lossy re-tokenization or template mismatches.
+  2. **Harmonized Reasoning Dialect**: Models within the same family interpret instruction tags, chain-of-thought `<think>` blocks, and system prompts identically.
+  3. **Zero-Copy Token Passing**: Messages pass across sibling agents via raw token-ID buffers in memory, skipping string serialization/deserialization.
+
+* **Supported Intra-Family Swarms**:
+  * **Family Qwen**: `Qwen 2.5 Coder 32B` (Lead Architect) $\longleftrightarrow$ `Qwen 2.5 Coder 7B` (Fast Executor & Code Verifier).
+  * **Family DeepSeek**: `DeepSeek-R1` (Deep Reasoner & Strategist) $\longleftrightarrow$ `DeepSeek-Coder` (Implementation Engine).
+  * **Family Llama**: `Llama 3.3 70B` (Supervisor & Synthesizer) $\longleftrightarrow$ `Llama 3.1 8B` (Fast Subtask Worker).
+  * **Family Mistral**: `Mistral Large` (Task Planner) $\longleftrightarrow$ `Codestral / NeMo` (Execution Unit).
+
 #### Hardware Fit Algorithm
 The selector computes a **Hardware Compatibility Score (HCS)**:
 
