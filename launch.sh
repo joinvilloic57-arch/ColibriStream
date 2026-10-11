@@ -468,7 +468,17 @@ import urllib.request, json, sys
 model = sys.argv[1]
 prompt = sys.argv[2]
 url = "http://localhost:11434/api/generate"
-data = json.dumps({"model": model, "prompt": prompt, "stream": True}).encode("utf-8")
+payload = {
+    "model": model,
+    "prompt": prompt,
+    "stream": True,
+    "options": {
+        "num_ctx": 2048,
+        "num_gpu": 99,
+        "f16_kv": True
+    }
+}
+data = json.dumps(payload).encode("utf-8")
 req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
 
 resp_accum = []
@@ -489,18 +499,36 @@ print()
     echo -e "${C_GREEN}─── [2/2] Worker (${WORKER}) Writing Implementation ───${C_RESET}"
     WORKER_PROMPT="You are the Fast Coder in an intra-family swarm. Implement the solution based strictly on the Architect's plan:\nPlan: ${PLAN_RESPONSE}\nOriginal Request: ${USER_PROMPT}"
     
-    curl -s http://localhost:11434/api/generate -d "{\"model\": \"${WORKER}\", \"prompt\": $(echo "$WORKER_PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'), \"stream\": true}" | python3 -c '
-import sys, json
-for line in sys.stdin:
-    if line.strip():
-        try:
-            chunk = json.loads(line)
-            sys.stdout.write(chunk.get("response", ""))
-            sys.stdout.flush()
-        except:
-            pass
+    python3 -c '
+import urllib.request, json, sys
+
+model = sys.argv[1]
+prompt = sys.argv[2]
+url = "http://localhost:11434/api/generate"
+payload = {
+    "model": model,
+    "prompt": prompt,
+    "stream": True,
+    "options": {
+        "num_ctx": 2048,
+        "num_gpu": 99,
+        "f16_kv": True
+    }
+}
+data = json.dumps(payload).encode("utf-8")
+req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
+try:
+    with urllib.request.urlopen(req) as response:
+        for line in response:
+            if line:
+                chunk = json.loads(line.decode("utf-8"))
+                sys.stdout.write(chunk.get("response", ""))
+                sys.stdout.flush()
+except Exception as e:
+    sys.stderr.write(f"\n[Error: {e}]\n")
 print()
-'
+' "$WORKER" "$WORKER_PROMPT"
     echo -e "\n${C_GREEN}✔ Swarm task completed.${C_RESET}"
   done
 }
