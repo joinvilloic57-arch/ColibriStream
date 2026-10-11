@@ -176,9 +176,13 @@ def run_chat_session(model_name):
 
         print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{status_hint}", end="", flush=True)
         response_text, speed, tokens = stream_chat(model_name, history)
-        history.append({"role": "assistant", "content": response_text})
-
-        speed_str = f"{speed:.1f} tok/s" if speed > 0 else ""
+        if speed > 0:
+            if speed < 0.2:
+                speed_str = f"{speed:.2f} tok/s {C_YELLOW}[!] Critically slow: GPU bottleneck or running on secondary slow card / CPU swap{C_RESET}"
+            else:
+                speed_str = f"{speed:.1f} tok/s"
+        else:
+            speed_str = ""
         print(f"\n{C_DIM}└─ [{tokens} tokens {speed_str}]{C_RESET}")
 
 if __name__ == "__main__":
