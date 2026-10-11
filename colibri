@@ -285,7 +285,37 @@ cmd_run() {
 
 cmd_swarm() {
   ensure_backend
-  local family="${1:-qwen}"
+  local arg1="${1:-qwen}"
+  local arg2="$2"
+
+  if [ -n "$arg2" ]; then
+    ARCHITECT="$arg1"
+    WORKER="$arg2"
+  else
+    case "$arg1" in
+      72b|qwen-72b|qwen72b)
+        ARCHITECT="qwen2.5:72b"
+        WORKER="qwen2.5-coder:1.5b"
+        ;;
+      qwen|qwen-local)
+        ARCHITECT="qwen3:14b"
+        WORKER="qwen2.5-coder:1.5b"
+        ;;
+      deepseek)
+        ARCHITECT="deepseek-r1:14b"
+        WORKER="deepseek-coder:6.7b"
+        ;;
+      llama)
+        ARCHITECT="llama3.3:70b"
+        WORKER="llama3.1:8b"
+        ;;
+      *)
+        ARCHITECT="qwen3:14b"
+        WORKER="qwen2.5-coder:1.5b"
+        ;;
+    esac
+  fi
+
   clear 2>/dev/null || true
   echo -e "${C_GREEN}${C_BOLD}"
   echo "╔══════════════════════════════════════════════════════════════════════╗"
@@ -294,37 +324,19 @@ cmd_swarm() {
   echo "╚══════════════════════════════════════════════════════════════════════╝"
   echo -e "${C_RESET}"
 
-  case "$family" in
-    qwen)
-      ARCHITECT="qwen3:14b"
-      WORKER="qwen2.5-coder:1.5b"
-      ;;
-    deepseek)
-      ARCHITECT="deepseek-r1:14b"
-      WORKER="deepseek-coder:6.7b"
-      ;;
-    llama)
-      ARCHITECT="llama3.3:70b"
-      WORKER="llama3.1:8b"
-      ;;
-    *)
-      ARCHITECT="qwen3:14b"
-      WORKER="qwen2.5-coder:1.5b"
-      ;;
-  esac
-
-  echo -e "${C_CYAN}Active Intra-Family Swarm:${C_RESET}"
-  echo -e "  • ${C_BOLD}Lead Architect :${C_RESET} ${C_YELLOW}${ARCHITECT}${C_RESET} (Deep Reasoning & Strategy)"
+  echo -e "${C_CYAN}Active Intra-Family Swarm (2 Models in Parallel):${C_RESET}"
+  echo -e "  • ${C_BOLD}Lead Architect :${C_RESET} ${C_YELLOW}${ARCHITECT}${C_RESET} (Deep Reasoning & Planning)"
   echo -e "  • ${C_BOLD}Fast Worker    :${C_RESET} ${C_GREEN}${WORKER}${C_RESET} (Code Execution & Verification)\n"
 
   for m in "$ARCHITECT" "$WORKER"; do
     if ! curl -s http://localhost:11434/api/tags | grep -q "\"name\":\"${m}\""; then
-      echo -e "${C_YELLOW}[!] Swarm member '${m}' not cached. Auto-pulling...${C_RESET}"
+      echo -e "${C_YELLOW}[!] Swarm member '${m}' not cached. Auto-downloading...${C_RESET}"
       cmd_pull "$m"
     fi
   done
 
   echo -e "${C_GREEN}✔ Both agents resident in shared memory (1x RAM).${C_RESET}"
+  echo -e "${C_DIM}Direct Command: ${C_WHITE}colibri swarm ${ARCHITECT} ${WORKER}${C_RESET}"
   echo -e "${C_DIM}Type your prompt to let them collaborate (or 'exit' / '/menu'):${C_RESET}"
   
   while true; do
@@ -362,6 +374,67 @@ print()
 '
     echo -e "\n${C_GREEN}✔ Swarm task completed.${C_RESET}"
   done
+}
+
+# --- Custom Multi-Model Swarm Builder ---
+cmd_swarm_builder() {
+  clear 2>/dev/null || true
+  echo -e "${C_BOLD}${C_GREEN}"
+  echo "╔══════════════════════════════════════════════════════════════════════╗"
+  echo "║         CUSTOM MULTI-MODEL SWARM BUILDER (RUN 2+ MODELS)             ║"
+  echo "║     Pair any Big Brain AI with any Fast Worker AI in shared memory   ║"
+  echo "╚══════════════════════════════════════════════════════════════════════╝"
+  echo -e "${C_RESET}\n"
+
+  echo -e "${C_CYAN}Step 1: Choose Model #1 (The Lead Thinker / Architect):${C_RESET}"
+  echo -e "  1) qwen2.5:72b         (Big 72B Brain)"
+  echo -e "  2) qwen3:14b           (14B Reasoning Brain - Already Installed!)"
+  echo -e "  3) deepseek-r1:14b     (Deep Reasoning <think> Brain)"
+  echo -e "  4) llama3.3:70b        (Meta 70B Flagship)"
+  echo -e "  5) Enter custom model name"
+  read_input "${C_BOLD}Select [1-5]: ${C_RESET}" M1_CHOICE
+
+  case "$M1_CHOICE" in
+    1) MODEL1="qwen2.5:72b" ;;
+    2) MODEL1="qwen3:14b" ;;
+    3) MODEL1="deepseek-r1:14b" ;;
+    4) MODEL1="llama3.3:70b" ;;
+    5)
+      read_input "Enter Model 1 name: " MODEL1
+      ;;
+    *) MODEL1="qwen3:14b" ;;
+  esac
+
+  echo -e "\n${C_CYAN}Step 2: Choose Model #2 (The Fast Worker / Coder):${C_RESET}"
+  echo -e "  1) qwen2.5-coder:1.5b  (Ultra-Fast Coder - Already Installed!)"
+  echo -e "  2) qwen2.5-coder:7b    (7B Accurate Coder)"
+  echo -e "  3) deepseek-coder:6.7b (DeepSeek Fast Coder)"
+  echo -e "  4) llama3.1:8b         (Llama 8B Worker)"
+  echo -e "  5) Enter custom model name"
+  read_input "${C_BOLD}Select [1-5]: ${C_RESET}" M2_CHOICE
+
+  case "$M2_CHOICE" in
+    1) MODEL2="qwen2.5-coder:1.5b" ;;
+    2) MODEL2="qwen2.5-coder:7b" ;;
+    3) MODEL2="deepseek-coder:6.7b" ;;
+    4) MODEL2="llama3.1:8b" ;;
+    5)
+      read_input "Enter Model 2 name: " MODEL2
+      ;;
+    *) MODEL2="qwen2.5-coder:1.5b" ;;
+  esac
+
+  echo -e "\n${C_GREEN}${C_BOLD}Multi-Model Team Configured:${C_RESET}"
+  echo -e "  • ${C_YELLOW}Lead Architect:${C_RESET} ${MODEL1}"
+  echo -e "  • ${C_GREEN}Fast Worker   :${C_RESET} ${MODEL2}\n"
+
+  echo -e "${C_YELLOW}Direct Command to run this Swarm anytime:${C_RESET}"
+  echo -e "  ${C_BOLD}${C_WHITE}colibri swarm ${MODEL1} ${MODEL2}${C_RESET}\n"
+
+  read_input "${C_BOLD}Press Enter to boot this multi-model session now [Enter/b]: ${C_RESET}" CONF
+  if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
+    cmd_swarm "$MODEL1" "$MODEL2"
+  fi
 }
 
 # --- Option 7: Big Catalog of Every Free AI Family ---
@@ -494,73 +567,61 @@ EOF
     echo ""
 
     # Box 2: Model Hub Menu
-    echo -e "${C_BOLD}┌── UNIVERSAL MODEL HUB (CHOOSE A SWARM OR CATALOG [1-7]) ──────────┐${C_RESET}"
-    echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Live interactive loop${C_RESET}   │"
+    echo -e "${C_BOLD}┌── UNIVERSAL MODEL HUB: RUN BIG MODELS & MULTI-MODEL SWARMS ────────┐${C_RESET}"
+    echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Real-time collaboration │${C_RESET}"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
-    echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}2.4T Frontier Sparse MoE Swarm${C_RESET} (2.4 Trillion Params / Top-8)  │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri swarm qwen${C_RESET}                         │"
+    echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Extreme 72B Swarm${C_RESET} (Run Big 72B + Fast 1.5B Together)          │"
+    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET} │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri swarm deepseek${C_RESET}                     │"
+    echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Instant Local Swarm${C_RESET} (Run 14B Thinker + 1.5B Coder — No Wait)  │"
+    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}   │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}Qwen 2.5 Coder Swarm${C_RESET} (Architect 14B/32B + Worker 1.5B/7B)     │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri swarm qwen${C_RESET}                         │"
+    echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
+    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_GREEN}Llama 3.3 Heavy Swarm${C_RESET} (70B Supervisor + 8B Task Worker)       │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri swarm llama${C_RESET}                        │"
+    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_GREEN}Single Big Model${C_RESET} (Run Standalone 72B Flagship Solo)          │"
+    echo -e "│      → Direct Command: ${C_CYAN}colibri run qwen2.5:72b${C_RESET}                     │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_GREEN}Standalone Coder AI${C_RESET} (Qwen 2.5 Coder Desktop Chat)             │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri run qwen2.5-coder:1.5b${C_RESET}             │"
+    echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_YELLOW}Custom Swarm Builder${C_RESET} (Pick ANY 2+ Models to Run Together)     │"
+    echo -e "│      → Direct Command: ${C_CYAN}colibri swarm <model1> <model2>${C_RESET}             │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Thinking & Reasoning AI${C_RESET} (Qwen 3 14B with <think> Mode)        │"
-    echo -e "│      → Direct Command: ${C_CYAN}./colibri run qwen3:14b${C_RESET}                      │"
-    echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[7]${C_RESET} ${C_YELLOW}BIG FREE AI HUB: Browse All Models by Family${C_RESET}               │"
-    echo -e "│      → DeepSeek, Qwen, Llama, Mistral, Gemma, Phi (25+ models)    │"
+    echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Big Free AI Hub Catalog${C_RESET} (Browse All 25+ Models by Family)     │"
+    echo -e "│      → DeepSeek, Qwen, Llama, Mistral, Gemma, Phi                  │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-7] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1-6] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       1)
-        echo -e "\n${C_CYAN}[*] 2.4T Frontier Sparse MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_swarm qwen; fi
+        echo -e "\n${C_CYAN}[*] Extreme 72B Swarm (Qwen 72B + 1.5B Coder) selected.${C_RESET}"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
+        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen2.5:72b" "qwen2.5-coder:1.5b"; fi
         ;;
       2)
-        echo -e "\n${C_CYAN}[*] DeepSeek MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm deepseek${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_swarm deepseek; fi
+        echo -e "\n${C_CYAN}[*] Instant Local Swarm (Qwen3 14B + 1.5B Coder) selected.${C_RESET}"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
+        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen3:14b" "qwen2.5-coder:1.5b"; fi
         ;;
       3)
-        echo -e "\n${C_CYAN}[*] Qwen 2.5 Coder Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm qwen${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_swarm qwen; fi
+        echo -e "\n${C_CYAN}[*] DeepSeek MoE Swarm selected.${C_RESET}"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri swarm deepseek-r1:14b deepseek-coder:6.7b${C_RESET}\n"
+        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
+        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"; fi
         ;;
       4)
-        echo -e "\n${C_CYAN}[*] Llama 3.3 Heavy Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri swarm llama${C_RESET}\n"
+        echo -e "\n${C_CYAN}[*] Single Big Model (Qwen 2.5 72B) selected.${C_RESET}"
+        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colibri run qwen2.5:72b${C_RESET}\n"
         read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_swarm llama; fi
+        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_run "qwen2.5:72b"; fi
         ;;
       5)
-        echo -e "\n${C_CYAN}[*] Standalone Coder AI selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri run qwen2.5-coder:1.5b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_run "qwen2.5-coder:1.5b"; fi
+        cmd_swarm_builder
         ;;
-      6)
-        echo -e "\n${C_CYAN}[*] Qwen 3 14B Reasoning AI selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}./colibri run qwen3:14b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ]; then cmd_run "qwen3:14b"; fi
-        ;;
-      7)
+      6|7)
         cmd_big_catalog
         ;;
       q|Q|exit)
@@ -569,7 +630,7 @@ EOF
         ;;
       *)
         if [ -n "$CHOICE" ]; then
-          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-7 or q.${C_RESET}"
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6 or q.${C_RESET}"
           sleep 1
         fi
         ;;
@@ -585,8 +646,11 @@ case "$1" in
   pull)
     cmd_pull "$2"
     ;;
-  swarm)
-    cmd_swarm "$2"
+  swarm|multi)
+    cmd_swarm "$2" "$3"
+    ;;
+  build)
+    cmd_swarm_builder
     ;;
   list|ls)
     cmd_list
@@ -598,6 +662,6 @@ case "$1" in
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} ./colibri [menu|run <model>|swarm <family>|pull <model>|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colibri [menu|run <model>|swarm <model1> [model2]|build|list|catalog]"
     ;;
 esac
