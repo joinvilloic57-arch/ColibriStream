@@ -373,6 +373,13 @@ cmd_pull() {
     echo -e "${C_RED}[ERROR] Specify a model name. Example: colistream pull qwen2.5-coder:7b${C_RESET}"
     exit 1
   fi
+  case "$model" in
+    32b|32B) model="qwen2.5-coder:32b-instruct-q3_K_M" ;;
+    72b|72B) model="qwen2.5:72b" ;;
+    14b|14B) model="qwen3:14b" ;;
+    1.5b|1.5B) model="qwen2.5-coder:1.5b" ;;
+    7b|7B) model="qwen2.5-coder:7b" ;;
+  esac
   echo -e "${C_CYAN}[*] Contacting Bare-Metal Hub for: ${C_BOLD}${model}${C_RESET}..."
   
   python3 -c "
@@ -386,6 +393,11 @@ req = urllib.request.Request(
     headers={'Content-Type': 'application/json'}
 )
 
+start_time = time.time()
+last_time = start_time
+last_bytes = 0
+speed_mb = 0.0
+
 try:
     with urllib.request.urlopen(req) as resp:
         for line in resp:
@@ -395,13 +407,27 @@ try:
             completed = data.get('completed', 0)
             
             if total > 0:
+                now = time.time()
+                dt = now - last_time
+                if dt >= 0.4:
+                    speed_mb = ((completed - last_bytes) / (1024**2)) / dt if dt > 0 else 0.0
+                    last_bytes = completed
+                    last_time = now
+
                 pct = int((completed / total) * 100)
                 gb_done = completed / (1024**3)
                 gb_tot = total / (1024**3)
-                bar_len = 25
+                bar_len = 20
                 filled = int(bar_len * completed // total)
                 bar = '█' * filled + '░' * (bar_len - filled)
-                sys.stdout.write(f'\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) - \033[38;5;45m{status:<22}\033[0m')
+                rem_bytes = total - completed
+                if speed_mb > 0.05 and rem_bytes > 0:
+                    eta_s = int(rem_bytes / (speed_mb * 1024 * 1024))
+                    m, s = divmod(eta_s, 60)
+                    eta_str = f'{m}m{s:02d}s'
+                else:
+                    eta_str = '--:--'
+                sys.stdout.write(f'\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) \033[38;5;226m{speed_mb:5.1f} MB/s\033[0m ETA \033[38;5;45m{eta_str}\033[0m - \033[38;5;244m{status[:16]:<16}\033[0m')
                 sys.stdout.flush()
             else:
                 if status and status != 'success':
@@ -411,6 +437,9 @@ try:
                 sys.stdout.write('\r\033[K')
                 print(f'\033[38;5;48m\033[1m✔ Model {model_name} downloaded & verified on disk!\033[0m')
                 break
+except KeyboardInterrupt:
+    print('\n\033[38;5;220m[!] Download cancelled by user.\033[0m')
+    sys.exit(130)
 except Exception as e:
     print(f'\n\033[38;5;196m[ERROR] Failed to pull {model_name}: {e}\033[0m')
     sys.exit(1)
@@ -458,6 +487,34 @@ def resolve_model_name(name):
         return "qwen2.5-coder:7b"
     return n
 
+def get_visible_vram_mb():
+    try:
+        cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+        active_gpu = None
+        if os.path.exists(cfg_file):
+            with open(cfg_file, "r") as f:
+                active_gpu = f.read().strip()
+        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
+
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,memory.total", "--format=csv,noheader,nounits"],
+            stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        
+        total_vram = 0
+        for line in out.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) == 2:
+                idx, mem = parts[0], int(parts[1])
+                if env_cuda == "all" or not env_cuda:
+                    total_vram += mem
+                elif str(idx) in env_cuda.split(","):
+                    total_vram += mem
+        return total_vram
+    except Exception:
+        return 24576
+
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
     try:
@@ -476,6 +533,11 @@ def ensure_model_installed(model_name):
         data=json.dumps({"name": model_name, "stream": True}).encode("utf-8"),
         headers={"Content-Type": "application/json"}
     )
+    start_time = time.time()
+    last_time = start_time
+    last_bytes = 0
+    speed_mb = 0.0
+
     try:
         with urllib.request.urlopen(req) as resp:
             for line in resp:
@@ -484,18 +546,39 @@ def ensure_model_installed(model_name):
                 total = data.get("total", 0)
                 completed = data.get("completed", 0)
                 if total > 0:
+                    now = time.time()
+                    dt = now - last_time
+                    if dt >= 0.4:
+                        speed_mb = ((completed - last_bytes) / (1024**2)) / dt if dt > 0 else 0.0
+                        last_bytes = completed
+                        last_time = now
+
                     pct = int((completed / total) * 100)
                     gb_done = completed / (1024**3)
                     gb_tot = total / (1024**3)
-                    bar_len = 25
+                    bar_len = 20
                     filled = int(bar_len * completed // total)
                     bar = "█" * filled + "░" * (bar_len - filled)
-                    sys.stdout.write(f"\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) - \033[38;5;45m{status:<22}\033[0m")
+                    rem_bytes = total - completed
+                    if speed_mb > 0.05 and rem_bytes > 0:
+                        eta_s = int(rem_bytes / (speed_mb * 1024 * 1024))
+                        m, s = divmod(eta_s, 60)
+                        eta_str = f"{m}m{s:02d}s"
+                    else:
+                        eta_str = "--:--"
+                    sys.stdout.write(f"\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) \033[38;5;226m{speed_mb:5.1f} MB/s\033[0m ETA \033[38;5;45m{eta_str}\033[0m - \033[38;5;244m{status[:16]:<16}\033[0m")
                     sys.stdout.flush()
+                else:
+                    if status and status != "success":
+                        sys.stdout.write(f"\r\033[38;5;244m[*] {status:<60}\033[0m")
+                        sys.stdout.flush()
                 if status == "success":
                     sys.stdout.write("\r\033[K")
                     print(f"\033[38;5;48m\033[1m✔ Model {model_name} downloaded & verified on disk!\033[0m")
                     return True
+    except KeyboardInterrupt:
+        print(f"\n{C_YELLOW}[!] Download cancelled by user.{C_RESET}")
+        sys.exit(130)
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Download warning: {e}{C_RESET}")
         return False
@@ -505,18 +588,24 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     model_name = resolve_model_name(model_name)
     cpu_threads = max(1, os.cpu_count() or 4)
     opt_threads = min(cpu_threads, 16)
+    vram_mb = get_visible_vram_mb()
 
     m_lower = model_name.lower()
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     if is_70b:
-        # 70B/72B dense models (~47GB Q4 / ~30GB Q2) exceed single 24GB VRAM.
-        # Offload 38 of 80 layers strictly allocating ~22.0 GB VRAM, leaving 2GB KV headroom.
-        # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
-        num_gpu_layers = 38
-        num_ctx_val = 1536
-        num_batch_val = 256
+        if vram_mb >= 44000:
+            # Multi-GPU Mode (>=48GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 20-25+ tok/s!
+            num_gpu_layers = 99
+            num_ctx_val = 2048
+            num_batch_val = 512
+        else:
+            # Single 24GB card mode: Offload 38 of 80 layers strictly allocating ~22.0 GB VRAM, leaving 2GB KV headroom.
+            # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
+            num_gpu_layers = 38
+            num_ctx_val = 1536
+            num_batch_val = 256
     elif is_32b:
         # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
         # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
@@ -601,24 +690,30 @@ def run_chat_session(model_name):
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM DESKTOP AI — BARE-METAL CHAT SESSION                     │{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
+    vram_mb = get_visible_vram_mb()
     print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
     if is_32b:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
     elif is_70b:
-        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
+        if vram_mb >= 44000:
+            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Multi-GPU Mode (~48GB VRAM Pool • 100% on GPUs @ 20+ tok/s){C_RESET} │")
+        else:
+            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
     else:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
     print(f"│  {C_DIM}Commands:{C_RESET}    {C_YELLOW}/menu{C_RESET} (Back to Menu) | {C_YELLOW}/clear{C_RESET} (Reset Context) | {C_YELLOW}/exit{C_RESET}      │")
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
-    if is_70b:
-        print(f"\n{C_YELLOW}┌── HARDWARE ADVISORY: 72B HEAVY DENSE MODEL ──────────────────────────┐{C_RESET}")
+    if is_70b and vram_mb < 44000:
+        print(f"\n{C_YELLOW}┌── HARDWARE ADVISORY: 72B SINGLE-CARD BOTTLENECK ──────────────────────┐{C_RESET}")
         print(f"│ {C_BOLD}Weight Size{C_RESET} : ~47 GB (Q4) / ~30 GB (Q2) — Exceeds single 24GB VRAM card   │")
         print(f"│ {C_BOLD}Allocation{C_RESET}  : ~22 GB on GPU (38 layers) + ~25 GB on Host RAM & CPU      │")
-        print(f"│ {C_BOLD}Performance{C_RESET} : First token ~45-90s (PCIe/RAM round-trip), speed ~1 tok/s   │")
+        print(f"│ {C_BOLD}Bandwidth{C_RESET}   : DDR4 RAM is ~35 GB/s (vs GPU ~700 GB/s) -> caps to ~1 tok/s │")
         print(f"│                                                                      │")
-        print(f"│ {C_GREEN}★ FAST ALTERNATIVE (0 RAM, 0 CPU, 100% VRAM @ 20+ tok/s):{C_RESET}            │")
-        print(f"│   Run Flagship 32B: {C_CYAN}colistream run qwen2.5-coder:32b-instruct-q3_K_M{C_RESET}     │")
+        print(f"│ {C_GREEN}★ HOW TO GET 20-25+ TOK/S:{C_RESET}                                           │")
+        print(f"│   1. Dual GPUs (>=48GB VRAM): Switch with 'colistream gpu all'        │")
+        print(f"│   2. Single 24GB Card: Run 32B Coder (17GB VRAM, 0 RAM, 0 CPU @ 25 t/s)│")
+        print(f"│      Command: {C_CYAN}colistream run 32b{C_RESET}                                      │")
         print(f"{C_YELLOW}└──────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
 
     history = [
@@ -732,7 +827,7 @@ except Exception:
 
   if [ "$is_installed" != "1" ]; then
     echo -e "\n${C_YELLOW}[!] Model '${model}' not found locally on disk. Auto-downloading now...${C_RESET}"
-    cmd_pull "$model"
+    cmd_pull "$model" || return 1
   fi
 
   local chat_script="${DIR}/colibri_chat.py"
