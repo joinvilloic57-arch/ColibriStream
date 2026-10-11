@@ -399,8 +399,21 @@ cmd_swarm() {
   echo -e "  • ${C_BOLD}Fast Worker    :${C_RESET} ${C_GREEN}${WORKER}${C_RESET} (Code Execution & Verification)\n"
 
   for m in "$ARCHITECT" "$WORKER"; do
-    if ! curl -s http://localhost:11434/api/tags | grep -q "\"name\":\"${m}\""; then
-      echo -e "${C_YELLOW}[!] Swarm member '${m}' not cached. Auto-downloading...${C_RESET}"
+    local is_cached
+    is_cached=$(python3 -c "
+import urllib.request, json, sys
+target = sys.argv[1]
+try:
+    with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3) as resp:
+        tags = json.loads(resp.read().decode()).get('models', [])
+        names = [m.get('name', '') for m in tags]
+        print('1' if any(target == n or (target + ':latest') == n or n.startswith(target + ':') for n in names) else '0')
+except:
+    print('0')
+" "$m" 2>/dev/null || echo "0")
+
+    if [ "$is_cached" != "1" ]; then
+      echo -e "${C_YELLOW}[!] Swarm member '${m}' not found locally. Auto-downloading...${C_RESET}"
       cmd_pull "$m"
     fi
   done
@@ -423,9 +436,29 @@ cmd_swarm() {
     echo -e "\n${C_YELLOW}─── [1/2] Architect (${ARCHITECT}) Formulating Plan ───${C_RESET}"
     PLAN_PROMPT="You are the Lead Architect in an intra-family swarm. Analyze this task and provide a concise, step-by-step technical plan for the worker:\nTask: ${USER_PROMPT}"
     
-    PLAN_RESPONSE=$(curl -s http://localhost:11434/api/generate -d "{\"model\": \"${ARCHITECT}\", \"prompt\": $(echo "$PLAN_PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'), \"stream\": false}" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("response", ""))')
-    
-    echo -e "${C_DIM}${PLAN_RESPONSE}${C_RESET}\n"
+    PLAN_RESPONSE=$(python3 -c '
+import urllib.request, json, sys
+
+model = sys.argv[1]
+prompt = sys.argv[2]
+url = "http://localhost:11434/api/generate"
+data = json.dumps({"model": model, "prompt": prompt, "stream": True}).encode("utf-8")
+req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
+resp_accum = []
+try:
+    with urllib.request.urlopen(req) as response:
+        for line in response:
+            if line:
+                chunk = json.loads(line.decode("utf-8"))
+                tok = chunk.get("response", "")
+                sys.stdout.write(tok)
+                sys.stdout.flush()
+                resp_accum.append(tok)
+except Exception as e:
+    sys.stderr.write(f"\n[Error: {e}]\n")
+print()
+' "$ARCHITECT" "$PLAN_PROMPT")
 
     echo -e "${C_GREEN}─── [2/2] Worker (${WORKER}) Writing Implementation ───${C_RESET}"
     WORKER_PROMPT="You are the Fast Coder in an intra-family swarm. Implement the solution based strictly on the Architect's plan:\nPlan: ${PLAN_RESPONSE}\nOriginal Request: ${USER_PROMPT}"
