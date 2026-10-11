@@ -163,8 +163,26 @@
   </div>
 
   <script>
+    // Dynamically adapt the command to the current host if running locally
+    function getCommand() {
+      const origin = window.location.origin;
+      if (origin && (origin.includes("localhost") || origin.includes("10.0.") || origin.includes("127.0.0.1") || origin.includes(":8888"))) {
+        return `curl -fsSL ${origin}/launch.sh | bash`;
+      }
+      return "curl -fsSL https://colibristream.run | bash";
+    }
+
+    // Set command on load
+    document.addEventListener("DOMContentLoaded", () => {
+      const cmd = getCommand();
+      const codeSpan = document.querySelector("#cmdText span:last-child");
+      if (codeSpan) {
+        codeSpan.innerText = cmd;
+      }
+    });
+
     function copyCommand() {
-      const text = "curl -fsSL https://colibristream.run | bash";
+      const text = getCommand();
       navigator.clipboard.writeText(text).then(() => {
         const btn = document.getElementById("copyBtn");
         btn.innerText = "Copied!";
