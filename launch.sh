@@ -55,14 +55,45 @@ AVAIL_MEM_GB=$((AVAIL_MEM_KB / 1024 / 1024))
 # Check HugePages
 HP_AVAIL=$(grep -i HugePages_Total /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
 
-# --- 3. GPU / Accelerator Telemetry ---
-GPU_INFO="None (Host RAM / NUMA Unified Pool)"
+# --- 3. GPU / Multi-GPU Accelerator Telemetry ---
+GPU_COUNT=0
+GPU_LIST=()
+
 if command -v nvidia-smi >/dev/null 2>&1; then
-  GPU_NAME=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 || true)
-  if [ -n "$GPU_NAME" ]; then GPU_INFO="NVIDIA $GPU_NAME MB"; fi
-elif lspci 2>/dev/null | grep -i -E "vga|3d|accel|nvidia" >/dev/null; then
-  RAW_GPU=$(lspci 2>/dev/null | grep -i -E "vga|3d|accel" | head -n1 | cut -d: -f3 | sed 's/^[ \t]*//')
-  GPU_INFO="${RAW_GPU:-Integrated / CPU Fallback}"
+  while IFS=, read -r gname gmem; do
+    if [ -n "$gname" ]; then
+      GPU_COUNT=$((GPU_COUNT + 1))
+      clean_name=$(echo "$gname" | sed -e 's/^[ \t]*//')
+      clean_mem=$(echo "$gmem" | sed -e 's/^[ \t]*//')
+      GPU_LIST+=("${clean_name} [${clean_mem}]")
+    fi
+  done < <(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true)
+fi
+
+if [ "$GPU_COUNT" -eq 0 ] && command -v rocm-smi >/dev/null 2>&1; then
+  rocm_count=$(rocm-smi --showid 2>/dev/null | grep -c "GPU\[" || echo 0)
+  if [ "$rocm_count" -gt 0 ]; then
+    GPU_COUNT=$rocm_count
+    GPU_LIST+=("${GPU_COUNT}x AMD ROCm GPU(s)")
+  fi
+fi
+
+if [ "$GPU_COUNT" -eq 0 ]; then
+  while IFS= read -r dev; do
+    if [ -n "$dev" ]; then
+      GPU_COUNT=$((GPU_COUNT + 1))
+      raw_name=$(echo "$dev" | cut -d: -f3 | sed -e 's/^[ \t]*//')
+      GPU_LIST+=("$raw_name")
+    fi
+  done < <(lspci 2>/dev/null | grep -i -E "vga compatible controller|3d controller|display controller" || true)
+fi
+
+if [ "$GPU_COUNT" -eq 0 ]; then
+  GPU_INFO="None (Pure CPU / NUMA Unified Memory)"
+elif [ "$GPU_COUNT" -eq 1 ]; then
+  GPU_INFO="1 GPU: ${GPU_LIST[0]}"
+else
+  GPU_INFO="${GPU_COUNT} GPUs Pooled: ${GPU_LIST[0]} (+ $((GPU_COUNT - 1)) more)"
 fi
 
 # --- 4. NVMe / Disk Speed Benchmark ---
