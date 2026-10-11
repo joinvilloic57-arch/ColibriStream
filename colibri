@@ -366,6 +366,51 @@ except Exception as e:
   echo -e "${C_BOLD}└──────────────────────────────────────────────────────────────────────┘${C_RESET}"
 }
 
+cmd_diag() {
+  ensure_backend
+  echo -e "\n${C_BOLD}${C_GREEN}┌── COLIBRISTREAM HARDWARE & INFERENCE DIAGNOSTICS ──────────────────┐${C_RESET}"
+  echo -e "│ ${C_BOLD}Active GPU Config${C_RESET} : ${ACTIVE_GPU:-0} (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all})"
+  echo -e "├───────────────────────────────────────────────────────────────────┤"
+  echo -e "│ ${C_BOLD}NVIDIA GPU Hardware Details:${C_RESET}"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=index,name,memory.total,memory.free,pcie.link.gen.current,pcie.link.width.current,utilization.gpu --format=csv,noheader | while IFS=, read -r gidx gname gtot gfree gpgen gpwidth gutil; do
+      printf "│   • [GPU %s] %-20.20s | VRAM: %s (%s Free) | PCIe Gen%sx%s | Util: %s\n" \
+        "$(echo "$gidx" | tr -d ' ')" "$(echo "$gname" | tr -d ' ')" "$(echo "$gtot" | tr -d ' ')" "$(echo "$gfree" | tr -d ' ')" \
+        "$(echo "$gpgen" | tr -d ' ')" "$(echo "$gpwidth" | tr -d ' ')" "$(echo "$gutil" | tr -d ' ')"
+    done
+  else
+    echo -e "│   No nvidia-smi detected."
+  fi
+  echo -e "├───────────────────────────────────────────────────────────────────┤"
+  echo -e "│ ${C_BOLD}Active Inference Daemon Process (ollama ps):${C_RESET}"
+  python3 -c "
+import urllib.request, json
+try:
+    with urllib.request.urlopen('http://localhost:11434/api/ps', timeout=3) as resp:
+        data = json.loads(resp.read().decode())
+        models = data.get('models', [])
+        if not models:
+            print('│   No model currently active in GPU/RAM memory.')
+        for m in models:
+            name = m.get('name', 'unknown')
+            size_vram = m.get('size_vram', 0) / (1024**3)
+            size_tot = m.get('size', 0) / (1024**3)
+            pct_gpu = int((size_vram / size_tot) * 100) if size_tot > 0 else 0
+            pct_cpu = 100 - pct_gpu
+            print(f'│   • Model: {name}')
+            print(f'│     Allocation: {size_vram:.1f} GB / {size_tot:.1f} GB ({pct_gpu}% GPU / {pct_cpu}% CPU)')
+            if pct_cpu > 0:
+                print('│     \033[38;5;220m[!] BOTTLENECK DETECTED:\033[0m Model is split across CPU/RAM!')
+                print('│         Host RAM transfer caps speed to ~0.06 - 1.0 tok/s.')
+                print('│         \033[38;5;48m✔ FIX:\033[0m Run 32B for 100% GPU acceleration @ 20-25+ tok/s: colistream run 32b')
+            else:
+                print('│     \033[38;5;48m✔ 100% GPU ACCELERATED (0 RAM / 0 CPU)\033[0m')
+except Exception as e:
+    print(f'│   Could not query backend ps: {e}')
+"
+  echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
+}
+
 cmd_pull() {
   ensure_backend
   local model="$1"
@@ -1203,11 +1248,14 @@ EOF
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow Card)  │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream gpu <id|all>${C_RESET}                         │"
+    echo -e "│                                                                   │"
+    echo -e "│  ${C_BOLD}[d]${C_RESET} ${C_YELLOW}Hardware & Speed Diagnostics${C_RESET} (Inspect GPU/CPU VRAM Splits)│"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream diag${C_RESET}                                 │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-6, g] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1-6, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       1)
@@ -1234,6 +1282,10 @@ EOF
         ;;
       g|G|gpu|gpus)
         cmd_switch_gpu
+        ;;
+      d|D|diag|doctor)
+        cmd_diag
+        read_input "Press Enter to return to menu: " _
         ;;
       q|Q|exit)
         echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
@@ -1272,10 +1324,13 @@ case "$1" in
   gpu|gpus)
     cmd_switch_gpu "$2"
     ;;
+  diag|doctor)
+    cmd_diag
+    ;;
   menu|"")
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm <model1> [model2]|gpu [id]|build|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|diag|gpu [id]|swarm <m1> [m2]|list|catalog]"
     ;;
 esac
