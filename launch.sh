@@ -16,17 +16,27 @@ C_PURPLE="\033[38;5;141m"
 C_GRAY="\033[38;5;244m"
 C_WHITE="\033[38;5;255m"
 
-# Resolve Directory
+# Resolve Directory & Self-Install to User PATH
+DIR="${HOME}/.colistream"
+mkdir -p "$DIR" "${HOME}/.local/bin"
+
+# If executed via curl | bash, save a copy to ~/.colistream/colistream
 if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
-  DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-elif [ -f "./colibri" ]; then
-  DIR="$PWD"
-elif [ -f "/home/tech/Projects/collibri/colibri" ]; then
-  DIR="/home/tech/Projects/collibri"
-else
-  DIR="${HOME}/.colibri"
-  mkdir -p "$DIR"
+  CURRENT_FILE="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+  if [ -f "$CURRENT_FILE" ] && [ "$CURRENT_FILE" != "${HOME}/.local/bin/colistream" ]; then
+    cp "$CURRENT_FILE" "${HOME}/.local/bin/colistream" 2>/dev/null || true
+    chmod +x "${HOME}/.local/bin/colistream" 2>/dev/null || true
+    ln -sf "${HOME}/.local/bin/colistream" "${HOME}/.local/bin/colibristream" 2>/dev/null || true
+  fi
 fi
+
+# Ensure ~/.local/bin is in PATH for future shells
+for profile in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
+  if [ -f "$profile" ] && ! grep -q '\.local/bin' "$profile"; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
+  fi
+done
+export PATH="${HOME}/.local/bin:${PATH}"
 
 # TTY-safe input reader (supports both terminal and curl pipes)
 read_input() {
