@@ -255,7 +255,11 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
             "temperature": 0.7,
             "num_gpu": 99,
             "num_thread": opt_threads,
-            "num_ctx": 2048
+            "num_ctx": 2048,
+            "num_batch": 512,
+            "f16_kv": True,
+            "use_mmap": True,
+            "use_mlock": False
         }
     }
     data = json.dumps(payload).encode("utf-8")
