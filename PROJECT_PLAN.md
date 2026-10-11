@@ -194,6 +194,54 @@ To enable collaborative intelligence without cross-model hallucinations, Colibri
   * **Family Llama**: `Llama 3.3 70B` (Supervisor & Synthesizer) $\longleftrightarrow$ `Llama 3.1 8B` (Fast Subtask Worker).
   * **Family Mistral**: `Mistral Large` (Task Planner) $\longleftrightarrow$ `Codestral / NeMo` (Execution Unit).
 
+#### The Extreme-Scale Architecture: 72B to 2.4T Parameters at ~20 tok/s with Low System Footprint
+
+The ultimate ambition of Colibristream is running massive models (72B up to 2.4 Trillion parameters) across 1 or multiple GPU cards without exhausting system RAM, GPU VRAM, CPU cores, or NVMe bandwidth, while sustaining interactive generation speeds (~20 tokens/sec).
+
+```
+   ┌─────────────────────────────────────────────────────────────────────────────┐
+   │             SPARSE MoE PREDICTIVE EXPERT STREAMING PIPELINE                 │
+   │                                                                             │
+   │  [ NVMe SSD ]                                      [ GPU VRAM / Host RAM ]  │
+   │  Total Model: 2.4 Trillion Params (Sparse MoE)     Working Set: < 24-32 GB  │
+   │  ┌──────────────────────────────────────────┐                               │
+   │  │ 256 Inactive Experts Stored on NVMe      │                               │
+   │  └──────────────────────────────────────────┘                               │
+   │                     │ Async io_uring / DMA                                  │
+   │                     ▼ (Predictive Prefetch)                                 │
+   │  ┌───────────────────────────────────────────────────────────────────────┐  │
+   │  │ Ring Buffer: Top-8 Active Experts for Layer N+1 (Pipelined in VRAM)   │  │
+   │  └───────────────────────────────────────────────────────────────────────┘  │
+   │                     │                                                       │
+   │                     ▼ Compute Token N while prefetching N+1                 │
+   │  [ Tensor Core / SIMD ] ──► Sustained 20+ tokens/sec Generation             │
+   └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### How Colibristream Achieves This Without Crashing the Host System
+
+1. **Sparse MoE Dynamic Routing (Top-K Expert Activation)**:
+   * Frontier models at 671B–2.4T scale (e.g. DeepSeek-V3/R1 architecture) are **sparse**, not dense.
+   * While the total model has 2.4T parameters, only a tiny subset (e.g. 8 out of 256 experts $\approx$ 37B active parameters) execute per token.
+   * Colibristream keeps shared attention weights and router layers permanently in memory, while streaming only the specific active experts on demand.
+
+2. **Predictive NVMe Expert Streaming via Ring Buffers (`io_uring` + DMA)**:
+   * **The Bottleneck Solved**: Reading 2.4T parameters from disk every token would freeze the system.
+   * **The Solution**: Layer $N$ predicts the router selections for Layer $N+1$ in advance.
+   * Using kernel `io_uring` asynchronous Direct I/O and GPU Direct Storage (GDS), Colibristream DMA-streams Layer $N+1$'s required expert weights from NVMe into a small pre-allocated 4GB–8GB GPU VRAM ring buffer *while* Layer $N$ is actively computing.
+   * **Result**: RAM and VRAM usage never exceeds 24GB–32GB, even when hosting a 2.4T model.
+
+3. **Multi-Agent Shared-Weight Deduplication (1 or Multiple Cards)**:
+   * When multiple same-family agents communicate (e.g. Qwen Planner $\longleftrightarrow$ Qwen Worker):
+   * **Shared Backbone Deduplication**: Sibling models share the identical base embedding tables, transformer attention projections, and vocabulary.
+   * Colibristream loads the shared base weights **once** into a globally mapped shared memory segment (`shm` / peer-to-peer PCIe BAR1 mapping across multiple GPUs).
+   * Multiple agents run concurrently on 1 card (via interleaved time-sliced scheduling) or partitioned across multiple cards (via Pipeline/Tensor Parallelism) with zero duplicate memory overhead.
+
+4. **Hardware Clamping & Host System Headroom Guardrails**:
+   * **RAM Cap**: Strictly clamps model working memory to a user-defined ceiling (e.g. max 50%–70% of host RAM), preserving host desktop fluidity.
+   * **NUMA & CPU Affinity Pinning**: Worker threads are pinned to specific CPU core sets, preventing 100% CPU lockups.
+   * **I/O Bandwidth Throttling**: Direct memory-mapped burst reads are paced to prevent saturating NVMe queues or locking disk access for other OS processes.
+
 #### Hardware Fit Algorithm
 The selector computes a **Hardware Compatibility Score (HCS)**:
 
