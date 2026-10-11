@@ -155,16 +155,16 @@
     <div class="command-box">
       <div class="command-text" id="cmdText">
         <span class="prompt-sym">$</span>
-        <span>curl -fsSL https://colibristream.com/install.sh | bash</span>
+        <span>curl -fsSL http://localhost:8888/install.sh | bash</span>
       </div>
       <button class="copy-btn" id="copyBtn" onclick="copyCommand()">Copy</button>
     </div>
 
-    <p class="caption">Paste into your terminal to launch on any computer</p>
+    <p class="caption">Paste into your terminal to launch</p>
   </div>
 
   <script>
-    const PUBLIC_INSTALL_CMD = "curl -fsSL https://colibristream.com/install.sh | bash";
+    const PUBLIC_INSTALL_CMD = "curl -fsSL http://localhost:8888/install.sh | bash";
 
     function getCommand() {
       return PUBLIC_INSTALL_CMD;
