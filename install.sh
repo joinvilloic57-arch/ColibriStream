@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Colibristream — Universal Open-Source Installer
-# Works on ANY Linux / macOS / WSL machine with zero setup.
-# Usage: curl -fsSL https://get.colibristream.run | bash
+# Colistream — 1-Line Universal Installer for ANY Computer
+# Usage: curl -fsSL http://10.0.2.235:8888/install.sh | bash
 # ==============================================================================
-
 set -e
 
 C_RESET="\033[0m"
@@ -14,43 +12,20 @@ C_CYAN="\033[38;5;45m"
 C_YELLOW="\033[38;5;220m"
 C_DIM="\033[2m"
 
-echo -e "${C_GREEN}${C_BOLD}"
-cat << "EOF"
-   ______      ___ __          _      __                         
-  / ____/___  / (_) /_  _____ (_)____/ /__________  ____ _____ ___ 
- / /   / __ \/ / / __ \/ ___// / ___/ __/ ___/ _ \/ __ `/ __ `__ \
-/ /___/ /_/ / / / /_/ / /   / (__  ) /_/ /  /  __/ /_/ / / / / / /
-\____/\____/_/_/_.___/_/   /_/____/\__/_/   \___/\__,_/_/ /_/ /_/ 
-EOF
-echo -e "${C_RESET}${C_DIM}         Universal Open-Source Bare-Metal AI Installer${C_RESET}\n"
-
 INSTALL_DIR="${HOME}/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
-echo -e "${C_CYAN}[1/3] Installing Colibristream binary to ${INSTALL_DIR}...${C_RESET}"
+echo -e "\n${C_GREEN}${C_BOLD}Installing colistream onto your computer...${C_RESET}"
 
-# If running from cloned repo, copy local colibri; otherwise download from repo
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-if [ -f "${SCRIPT_DIR}/colibri" ]; then
-  cp "${SCRIPT_DIR}/colibri" "${INSTALL_DIR}/colibri"
-  if [ -f "${SCRIPT_DIR}/colibri_chat.py" ]; then
-    cp "${SCRIPT_DIR}/colibri_chat.py" "${INSTALL_DIR}/colibri_chat.py"
-  fi
-else
-  # Fetch latest release from source repository
-  REPO_RAW="https://raw.githubusercontent.com/joinvilloic57/colibristream/main"
-  curl -fsSL "${REPO_RAW}/colibri" -o "${INSTALL_DIR}/colibri" 2>/dev/null || \
-  curl -fsSL "http://10.0.2.235:8888/colibri" -o "${INSTALL_DIR}/colibri"
-fi
+# Download latest colistream binary
+SERVER="http://10.0.2.235:8888"
+curl -fsSL "${SERVER}/colistream" -o "${INSTALL_DIR}/colistream" || \
+curl -fsSL "https://raw.githubusercontent.com/joinvilloic57/colibristream/main/colistream" -o "${INSTALL_DIR}/colistream"
 
-# Ensure binaries and symlinks are set up
-cp "${INSTALL_DIR}/colibri" "${INSTALL_DIR}/colistream"
 chmod +x "${INSTALL_DIR}/colistream"
-ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibri"
 ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibristream"
 
-echo -e "${C_CYAN}[2/3] Configuring system PATH environment...${C_RESET}"
-# Ensure ~/.local/bin is in PATH across all shell profiles
+# Add to ~/.bashrc and current session PATH
 for profile in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
   if [ -f "$profile" ] && ! grep -q '\.local/bin' "$profile"; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
@@ -58,15 +33,19 @@ for profile in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
 done
 export PATH="${INSTALL_DIR}:${PATH}"
 
-echo -e "${C_CYAN}[3/3] Checking bare-metal inference daemon...${C_RESET}"
+# Ensure backend daemon
 if ! command -v ollama >/dev/null 2>&1; then
-  echo -e "${C_YELLOW}[!] Local inference engine not detected. Auto-installing bare-metal engine...${C_RESET}"
+  echo -e "${C_CYAN}[*] Setting up local bare-metal engine...${C_RESET}"
   curl -fsSL https://ollama.com/install.sh | sh
 fi
 
-echo -e "\n${C_GREEN}${C_BOLD}✔ Installation Complete!${C_RESET}"
-echo -e "${C_DIM}Colibristream is installed and available globally as '${C_WHITE}colistream${C_DIM}' or '${C_WHITE}colibristream${C_DIM}'.${C_RESET}\n"
-echo -e "${C_YELLOW}Tip:${C_RESET} You can run it anytime with: ${C_CYAN}colistream${C_RESET}\n"
+echo -e "\n${C_GREEN}${C_BOLD}✔ Success! 'colistream' is now permanently installed.${C_RESET}"
+echo -e "${C_YELLOW}You can now run any model anytime:${C_RESET}"
+echo -e "  ${C_BOLD}${C_CYAN}colistream run qwen2.5:72b${C_RESET}"
+echo -e "  ${C_BOLD}${C_CYAN}colistream run qwen2.5-coder:1.5b${C_RESET}"
+echo -e "  ${C_BOLD}${C_CYAN}colistream${C_RESET} (interactive menu)\n"
 
-# Launch immediately into hardware scan and model hub
-exec "${INSTALL_DIR}/colistream" menu
+# If arguments were passed, run them immediately!
+if [ -n "$1" ]; then
+  exec "${INSTALL_DIR}/colistream" "$@"
+fi
