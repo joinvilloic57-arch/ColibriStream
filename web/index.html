@@ -12,9 +12,9 @@
     }
 
     body {
-      background-color: #0b0c10;
-      color: #e2e8f0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #0a0b10;
+      color: #f1f5f9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -22,71 +22,74 @@
       align-items: center;
       padding: 1.5rem;
       text-align: center;
+      background-image: radial-gradient(circle at 50% 35%, rgba(0, 255, 136, 0.06) 0%, transparent 65%);
     }
 
     .container {
       width: 100%;
-      max-width: 600px;
+      max-width: 620px;
       display: flex;
       flex-direction: column;
       align-items: center;
     }
 
     h1 {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 2.8rem;
-      font-weight: 700;
+      font-size: clamp(2.5rem, 6vw, 3.4rem);
+      font-weight: 800;
       color: #ffffff;
-      margin-bottom: 1.25rem;
-      letter-spacing: -1px;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      text-shadow: 0 0 30px rgba(0, 255, 136, 0.25);
     }
 
     h1 span {
       color: #00ff88;
     }
 
-    /* 1-4 lines of simple explanation */
-    .pitch {
-      font-size: 1.15rem;
+    /* Placed directly under the title, tight, sleek, not plain */
+    .subhead {
+      margin: 0.85rem 0 2.2rem 0;
+      font-size: clamp(0.95rem, 2.2vw, 1.05rem);
       line-height: 1.6;
       color: #94a3b8;
-      margin-bottom: 2rem;
+      max-width: 540px;
     }
 
-    .pitch p {
-      margin-bottom: 0.5rem;
-    }
-
-    .pitch strong {
-      color: #f1f5f9;
+    .subhead .highlight {
+      color: #00ff88;
       font-weight: 600;
     }
 
-    /* Clean Google-style Command / Link Box */
+    .subhead .dim {
+      color: #cbd5e1;
+    }
+
+    /* Terminal Command Box */
     .command-box {
       width: 100%;
-      background: #151821;
-      border: 1px solid #232736;
+      background: #11131a;
+      border: 1px solid #1f2433;
       border-radius: 10px;
-      padding: 0.85rem 1rem;
+      padding: 0.75rem 0.9rem 0.75rem 1.1rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 0.75rem;
-      transition: border-color 0.15s ease;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
 
     .command-box:hover {
-      border-color: #3b4259;
+      border-color: #2e364d;
+      box-shadow: 0 8px 35px rgba(0, 255, 136, 0.08);
     }
 
     .command-text {
       display: flex;
       align-items: center;
       gap: 8px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.95rem;
-      color: #f8fafc;
+      font-size: 0.92rem;
+      color: #e2e8f0;
       overflow-x: auto;
       white-space: nowrap;
       user-select: all;
@@ -99,39 +102,38 @@
 
     .copy-btn {
       background: #00ff88;
-      color: #090a0f;
+      color: #050608;
       border: none;
-      padding: 0.6rem 1.1rem;
+      padding: 0.6rem 1.15rem;
       border-radius: 6px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.85rem;
+      font-family: inherit;
+      font-size: 0.82rem;
       font-weight: 700;
       cursor: pointer;
       flex-shrink: 0;
-      transition: background 0.15s ease;
+      transition: all 0.15s ease;
     }
 
     .copy-btn:hover {
       background: #22c55e;
+      transform: translateY(-1px);
     }
 
     .caption {
-      margin-top: 1rem;
-      font-size: 0.85rem;
+      margin-top: 0.9rem;
+      font-size: 0.78rem;
       color: #64748b;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      letter-spacing: 0.3px;
     }
 
     @media (max-width: 520px) {
-      h1 { font-size: 2.2rem; }
-      .pitch { font-size: 1rem; }
       .command-box {
         flex-direction: column;
         align-items: stretch;
       }
       .copy-btn {
         width: 100%;
-        padding: 0.75rem;
+        padding: 0.7rem;
       }
     }
   </style>
@@ -140,15 +142,15 @@
 
   <div class="container">
     <h1>colibri<span>stream</span></h1>
-
-    <!-- Simple 1 to 4 line explanation -->
-    <div class="pitch">
-      <p>Run massive AI models directly on your computer for <strong>free</strong>.</p>
-      <p>Multiple AIs talk to each other to solve tasks <strong>without eating all your RAM</strong>.</p>
-      <p>No cloud, no API keys, no subscriptions. <strong>100% private</strong> on your machine.</p>
+    
+    <!-- Clean, tight explanation directly under title -->
+    <div class="subhead">
+      <span class="dim">Run massive AI models on bare metal for</span> <span class="highlight">free</span>.<br>
+      <span class="dim">Multi-AI swarms that talk to each other</span> <span class="highlight">without eating your RAM</span>.<br>
+      Zero cloud. Zero subscriptions. <span class="highlight">100% private</span> on your machine.
     </div>
 
-    <!-- The Command Box -->
+    <!-- The Launcher Box -->
     <div class="command-box">
       <div class="command-text" id="cmdText">
         <span class="prompt-sym">$</span>
@@ -157,7 +159,7 @@
       <button class="copy-btn" id="copyBtn" onclick="copyCommand()">Copy</button>
     </div>
 
-    <p class="caption">Paste this command into your terminal to launch.</p>
+    <p class="caption">Paste into your terminal to launch</p>
   </div>
 
   <script>
@@ -170,7 +172,7 @@
         setTimeout(() => {
           btn.innerText = "Copy";
           btn.style.background = "#00ff88";
-        }, 2000);
+        }, 1800);
       });
     }
   </script>
