@@ -177,6 +177,85 @@ cmd_pull() {
   echo -e "${C_GREEN}✔ Model ${model} is ready for execution.${C_RESET}"
 }
 
+write_inline_chat_script() {
+  local target="$1"
+  cat << 'PYEOF' > "$target"
+#!/usr/bin/env python3
+import sys, os, json, urllib.request, time
+
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_GREEN = "\033[38;5;48m"
+C_CYAN = "\033[38;5;45m"
+C_YELLOW = "\033[38;5;220m"
+C_GRAY = "\033[38;5;244m"
+
+def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
+    payload = {"model": model_name, "messages": messages, "stream": True, "options": {"temperature": 0.7}}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+    full_response = []
+    token_count = 0
+    try:
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                if not line: continue
+                try:
+                    chunk = json.loads(line.decode("utf-8"))
+                    content = chunk.get("message", {}).get("content", "")
+                    if content:
+                        sys.stdout.write(content)
+                        sys.stdout.flush()
+                        full_response.append(content)
+                        token_count += 1
+                    if chunk.get("done", False):
+                        eval_count = chunk.get("eval_count", token_count)
+                        eval_dur = chunk.get("eval_duration", 0) / 1e9
+                        speed = eval_count / eval_dur if eval_dur > 0 else 0
+                        return "".join(full_response), speed, eval_count
+                except json.JSONDecodeError: pass
+    except Exception as e:
+        print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
+        return "".join(full_response), 0, 0
+    return "".join(full_response), 0, 0
+
+def run_chat_session(model_name):
+    os.system("clear 2>/dev/null || true")
+    print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM DESKTOP AI — BARE-METAL CHAT SESSION                     │{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
+    print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
+    print(f"│  {C_DIM}Commands:{C_RESET}    {C_YELLOW}/menu{C_RESET} (Back to Menu) | {C_YELLOW}/clear{C_RESET} (Reset Context) | {C_YELLOW}/exit{C_RESET}      │")
+    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
+    history = [{"role": "system", "content": "You are a helpful expert local AI running on bare-metal via Colibristream."}]
+    while True:
+        try:
+            prompt = input(f"\n{C_BOLD}{C_GREEN}You ❯ {C_RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{C_DIM}Exiting session.{C_RESET}")
+            sys.exit(0)
+        if not prompt: continue
+        if prompt in ("/exit", "/quit", "exit", "quit"): sys.exit(0)
+        if prompt == "/menu": sys.exit(42)
+        if prompt == "/clear":
+            history = [history[0]]
+            print(f"{C_YELLOW}✔ Context cleared.{C_RESET}")
+            continue
+        history.append({"role": "user", "content": prompt})
+        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}", end="", flush=True)
+        response_text, speed, tokens = stream_chat(model_name, history)
+        history.append({"role": "assistant", "content": response_text})
+        speed_str = f"{speed:.1f} tok/s" if speed > 0 else ""
+        print(f"\n{C_DIM}└─ [{tokens} tokens {speed_str}]{C_RESET}")
+
+if __name__ == "__main__":
+    model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
+    run_chat_session(model)
+PYEOF
+  chmod +x "$target" 2>/dev/null || true
+}
+
 cmd_run() {
   ensure_backend
   local model="$1"
@@ -191,8 +270,13 @@ cmd_run() {
     cmd_pull "$model"
   fi
 
-  chmod +x "${DIR}/colibri_chat.py" 2>/dev/null || true
-  python3 "${DIR}/colibri_chat.py" "$model"
+  local chat_script="${DIR}/colibri_chat.py"
+  if [ ! -f "$chat_script" ]; then
+    chat_script="/tmp/colibri_chat.py"
+    write_inline_chat_script "$chat_script"
+  fi
+
+  python3 "$chat_script" "$model"
   local ret=$?
   if [ $ret -eq 42 ]; then
     cmd_loop_menu
