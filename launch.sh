@@ -140,7 +140,27 @@ fi
 printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
 echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-echo -e "${C_DIM}Press Enter to open Model Hub menu...${C_RESET}"
-read -r -t 2 || true
+# Resolve Colibristream root directory
+if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+elif [ -f "./colibri" ]; then
+  DIR="$PWD"
+elif [ -f "/home/tech/Projects/collibri/colibri" ]; then
+  DIR="/home/tech/Projects/collibri"
+else
+  DIR="${HOME}/.colibri"
+  mkdir -p "$DIR"
+fi
 
-exec "${DIR}/colibri" menu
+# Ensure colibri scripts exist if piped via curl
+if [ ! -f "${DIR}/colibri" ]; then
+  SERVER_URL="${COLIBRI_SERVER:-http://10.0.2.235:8888}"
+  curl -fsSL "${SERVER_URL}/colibri" -o "${DIR}/colibri" 2>/dev/null || true
+  curl -fsSL "${SERVER_URL}/colibri_chat.py" -o "${DIR}/colibri_chat.py" 2>/dev/null || true
+  chmod +x "${DIR}/colibri" "${DIR}/colibri_chat.py" 2>/dev/null || true
+fi
+
+echo -e "${C_DIM}Opening Model Hub menu...${C_RESET}\n"
+sleep 1
+
+exec bash "${DIR}/colibri" menu
