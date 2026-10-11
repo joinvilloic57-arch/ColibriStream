@@ -543,6 +543,7 @@ cmd_big_catalog() {
       exit 0
     fi
     cmd_run "$TARGET_MODEL"
+    break
   done
 }
 
