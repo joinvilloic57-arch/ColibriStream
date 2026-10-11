@@ -10,6 +10,265 @@ import json
 import urllib.request
 import urllib.error
 import time
+import re
+import glob
+import fnmatch
+import subprocess
+import shutil
+
+# --- Autonomous Coding Agent Subsystem (Aider-Style) ---
+tracked_files = {}   # {rel_path: content}
+file_backups = []    # [(rel_path, prev_content)]
+
+def add_file_to_context(pattern):
+    matches = glob.glob(pattern, recursive=True)
+    if not matches and os.path.exists(pattern):
+        matches = [pattern]
+    if not matches:
+        print(f"{C_YELLOW}[!] No files matching '{pattern}' found.{C_RESET}")
+        return 0
+    added = 0
+    for p in matches:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                rel = os.path.relpath(p)
+                tracked_files[rel] = content
+                lines = len(content.splitlines())
+                print(f"{C_GREEN}✔ Added '{rel}' ({lines} lines) to context.{C_RESET}")
+                added += 1
+            except Exception as e:
+                print(f"{C_YELLOW}[!] Could not read '{p}': {e}{C_RESET}")
+    return added
+
+def drop_file_from_context(pattern):
+    dropped = 0
+    for k in list(tracked_files.keys()):
+        if pattern == k or fnmatch.fnmatch(k, pattern):
+            del tracked_files[k]
+            print(f"{C_YELLOW}✔ Dropped '{k}' from context.{C_RESET}")
+            dropped += 1
+    if dropped == 0:
+        print(f"{C_YELLOW}[!] No tracked files matched '{pattern}'.{C_RESET}")
+    return dropped
+
+def list_context_files():
+    if not tracked_files:
+        print(f"{C_DIM}No files currently in context. Add some with: /add <filepath>{C_RESET}")
+        return
+    print(f"\n{C_BOLD}┌── TRACKED PROJECT FILES IN CONTEXT ─────────────────────────────────┐{C_RESET}")
+    total_lines = 0
+    for path, content in tracked_files.items():
+        lines = len(content.splitlines())
+        size_kb = len(content.encode("utf-8")) / 1024
+        total_lines += lines
+        print(f"│  • {C_CYAN}{path:<35}{C_RESET} {lines:>5} lines | {size_kb:>6.1f} KB          │")
+    print(f"├───────────────────────────────────────────────────────────────────┤")
+    print(f"│  Total: {len(tracked_files)} files ({total_lines} lines in model context)                     │")
+    print(f"{C_BOLD}└───────────────────────────────────────────────────────────────────┘{C_RESET}\n")
+
+def undo_last_change():
+    if not file_backups:
+        print(f"{C_YELLOW}[!] No recent file modifications to undo.{C_RESET}")
+        return
+    path, prev_content = file_backups.pop()
+    try:
+        if prev_content is None:
+            if os.path.exists(path):
+                os.remove(path)
+            tracked_files.pop(path, None)
+            print(f"{C_GREEN}✔ Undone: Removed newly created file '{path}'.{C_RESET}")
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(prev_content)
+            tracked_files[path] = prev_content
+            print(f"{C_GREEN}✔ Undone: Restored previous version of '{path}'.{C_RESET}")
+    except Exception as e:
+        print(f"{C_RED}[!] Failed to undo change to '{path}': {e}{C_RESET}")
+
+def show_git_diff():
+    try:
+        res = subprocess.run(["git", "diff", "--color=always"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.stdout:
+            print(res.stdout)
+        else:
+            print(f"{C_DIM}No unstaged git changes found in current directory.{C_RESET}")
+    except Exception as e:
+        print(f"{C_YELLOW}[!] Could not run git diff: {e}{C_RESET}")
+
+def execute_shell_command(cmd, history=None):
+    if not cmd:
+        return
+    print(f"\n{C_BOLD}{C_CYAN}$ {cmd}{C_RESET}")
+    try:
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.stdout:
+            sys.stdout.write(proc.stdout)
+        if proc.stderr:
+            sys.stdout.write(f"\033[38;5;208m{proc.stderr}\033[0m")
+        if proc.returncode != 0:
+            print(f"{C_YELLOW}[Process exited with code {proc.returncode}]{C_RESET}")
+        
+        if history is not None:
+            cmd_output = (proc.stdout + proc.stderr).strip()
+            if cmd_output:
+                history.append({
+                    "role": "user",
+                    "content": f"I executed the shell command: `{cmd}`\nOutput:\n```\n{cmd_output}\n```"
+                })
+                print(f"{C_DIM}[Command output automatically added to context]{C_RESET}")
+    except Exception as e:
+        print(f"{C_RED}[!] Failed to run command: {e}{C_RESET}")
+
+def print_coding_agent_help():
+    print(f"\n{C_BOLD}{C_GREEN}┌── COLIBRISTREAM AUTONOMOUS CODING AGENT COMMANDS ────────────────┐{C_RESET}")
+    print(f"│ {C_YELLOW}/add <file|glob>{C_RESET} : Add files to agent context (e.g. /add main.py or *.py) │")
+    print(f"│ {C_YELLOW}/drop <file>{C_RESET}     : Remove file from agent context                        │")
+    print(f"│ {C_YELLOW}/files{C_RESET}           : List all tracked files and lines in context           │")
+    print(f"│ {C_YELLOW}/diff{C_RESET}            : Show git diff of recent changes                       │")
+    print(f"│ {C_YELLOW}/undo{C_RESET}            : Revert last file modification or creation             │")
+    print(f"│ {C_YELLOW}!cmd / /run cmd{C_RESET}  : Run shell command directly (e.g. !pytest, !ls)        │")
+    print(f"│ {C_YELLOW}/clear{C_RESET}           : Reset conversation history                            │")
+    print(f"│ {C_YELLOW}/menu{C_RESET}            : Return to Model Menu                                  │")
+    print(f"│ {C_YELLOW}/exit{C_RESET}            : Exit session                                          │")
+    print(f"├──────────────────────────────────────────────────────────────────┤")
+    print(f"│ {C_BOLD}Autonomous File Creation & Modification (Aider Style):{C_RESET}           │")
+    print(f"│  • Create whole files : ```write:filepath\n...```               │")
+    print(f"│  • Edit surgical lines: ```edit:filepath\n<<<<<<< SEARCH...```  │")
+    print(f"│  • All files are created & edited directly on physical disk!     │")
+    print(f"{C_BOLD}└──────────────────────────────────────────────────────────────────┘{C_RESET}\n")
+
+def build_system_prompt():
+    cwd = os.getcwd()
+    sys_prompt = [
+        "You are an expert autonomous software engineer and local pair programmer running via Colibristream.",
+        f"Workspace root directory: {cwd}",
+        "You have full authority to inspect, create, and modify code files directly on disk.",
+        "",
+        "CRITICAL FILE CREATION & EDITING PROTOCOLS:",
+        "1. To CREATE or OVERWRITE a whole file, wrap the content in a code block with 'write:<filepath>' or 'create:<filepath>':",
+        "```write:path/to/file.ext",
+        "<complete code content here>",
+        "```",
+        "",
+        "2. To SURGICALLY MODIFY an existing file without rewriting it entirely (Aider-style), output search/replace blocks:",
+        "```edit:path/to/file.ext",
+        "<<<<<<< SEARCH",
+        "<exact lines to find from the file>",
+        "=======",
+        "<replacement lines>",
+        ">>>>>>>",
+        "```",
+        "",
+        "3. Always write clean, fully implemented code without skipping lines or using placeholders.",
+    ]
+    if tracked_files:
+        sys_prompt.append("\nCURRENT ACTIVE PROJECT FILES IN CONTEXT:")
+        for path, content in tracked_files.items():
+            sys_prompt.append(f"\n--- FILE: {path} ---\n```{path}\n{content}\n```")
+    return "\n".join(sys_prompt)
+
+def apply_model_edits(response_text):
+    created_or_modified = []
+    
+    # 1. Whole file writes: ```write:filepath or ```create:filepath
+    write_pattern = re.compile(r"```(?:write|create):([^\s\r\n]+)\s*\r?\n(.*?)```", re.DOTALL)
+    for match in write_pattern.finditer(response_text):
+        target_path = match.group(1).strip()
+        code = match.group(2)
+        if not target_path:
+            continue
+        try:
+            prev_content = None
+            if os.path.exists(target_path):
+                with open(target_path, "r", encoding="utf-8", errors="replace") as f:
+                    prev_content = f.read()
+            file_backups.append((target_path, prev_content))
+            os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            tracked_files[target_path] = code
+            lines = len(code.splitlines())
+            action = "Overwrote" if prev_content is not None else "Created"
+            print(f"\n{C_GREEN}{C_BOLD}[✔ {action} File]{C_RESET} {C_CYAN}{target_path}{C_RESET} ({lines} lines on disk)")
+            created_or_modified.append(target_path)
+        except Exception as e:
+            print(f"\n{C_RED}[!] Error writing '{target_path}': {e}{C_RESET}")
+
+    # 2. Surgical search/replace edits (Aider style): ```edit:filepath
+    edit_block_pattern = re.compile(r"```edit:([^\s\r\n]+)\s*\r?\n(.*?)```", re.DOTALL)
+    for match in edit_block_pattern.finditer(response_text):
+        target_path = match.group(1).strip()
+        edit_body = match.group(2)
+        if not os.path.exists(target_path):
+            print(f"\n{C_YELLOW}[!] Cannot edit '{target_path}': File does not exist.{C_RESET}")
+            continue
+        try:
+            with open(target_path, "r", encoding="utf-8", errors="replace") as f:
+                original_text = f.read()
+            chunk_pattern = re.compile(r"<<<<<<< SEARCH\s*\r?\n(.*?)\r?\n=======\s*\r?\n(.*?)\r?\n>>>>>>>", re.DOTALL)
+            modified_text = original_text
+            chunks_applied = 0
+            for chunk in chunk_pattern.finditer(edit_body):
+                search_block = chunk.group(1)
+                replace_block = chunk.group(2)
+                if search_block in modified_text:
+                    modified_text = modified_text.replace(search_block, replace_block, 1)
+                    chunks_applied += 1
+                else:
+                    s_norm = "\n".join(line.strip() for line in search_block.splitlines() if line.strip())
+                    lines = modified_text.splitlines()
+                    found = False
+                    for i in range(len(lines)):
+                        for j in range(i+1, min(i+len(search_block.splitlines())+5, len(lines)+1)):
+                            candidate = "\n".join(l.strip() for l in lines[i:j] if l.strip())
+                            if candidate == s_norm:
+                                modified_text = "\n".join(lines[:i] + replace_block.splitlines() + lines[j:])
+                                chunks_applied += 1
+                                found = True
+                                break
+                        if found:
+                            break
+                    if not found:
+                        print(f"{C_YELLOW}[!] Search chunk not found in '{target_path}'. Skipping chunk.{C_RESET}")
+
+            if chunks_applied > 0:
+                file_backups.append((target_path, original_text))
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(modified_text)
+                tracked_files[target_path] = modified_text
+                print(f"\n{C_GREEN}{C_BOLD}[✔ Applied {chunks_applied} Surgical Edit(s)]{C_RESET} {C_CYAN}{target_path}{C_RESET}")
+                created_or_modified.append(target_path)
+        except Exception as e:
+            print(f"\n{C_RED}[!] Error editing '{target_path}': {e}{C_RESET}")
+
+    # 3. Generic code block filename header: ```path/to/file.ext
+    if not created_or_modified:
+        generic_pattern = re.compile(r"```([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\s*\r?\n(.*?)```", re.DOTALL)
+        for match in generic_pattern.finditer(response_text):
+            target_path = match.group(1).strip()
+            code = match.group(2)
+            ext = os.path.splitext(target_path)[1].lower()
+            if ext in [".py", ".sh", ".bash", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".rs", ".c", ".cpp", ".go", ".md"]:
+                try:
+                    prev_content = None
+                    if os.path.exists(target_path):
+                        with open(target_path, "r", encoding="utf-8", errors="replace") as f:
+                            prev_content = f.read()
+                    file_backups.append((target_path, prev_content))
+                    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+                    with open(target_path, "w", encoding="utf-8") as f:
+                        f.write(code)
+                    tracked_files[target_path] = code
+                    lines = len(code.splitlines())
+                    action = "Overwrote" if prev_content is not None else "Created"
+                    print(f"\n{C_GREEN}{C_BOLD}[✔ {action} File]{C_RESET} {C_CYAN}{target_path}{C_RESET} ({lines} lines on disk)")
+                    created_or_modified.append(target_path)
+                except Exception as e:
+                    print(f"\n{C_RED}[!] Error writing '{target_path}': {e}{C_RESET}")
+
+    return created_or_modified
 
 C_RESET = "\033[0m"
 C_BOLD = "\033[1m"
@@ -248,10 +507,11 @@ def run_chat_session(model_name):
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM DESKTOP AI — BARE-METAL CHAT SESSION                     │{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM AUTONOMOUS CODING RUNTIME (AIDER-STYLE LOCAL AGENT)     │{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
     vram_mb = get_visible_vram_mb()
     print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
+    print(f"│  {C_YELLOW}Workspace   :{C_RESET} {C_WHITE}{os.getcwd():<47.47s}{C_RESET} │")
     if is_32b:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
     elif is_70b:
@@ -261,7 +521,9 @@ def run_chat_session(model_name):
             print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
     else:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
-    print(f"│  {C_DIM}Commands:{C_RESET}    {C_YELLOW}/menu{C_RESET} (Back to Menu) | {C_YELLOW}/clear{C_RESET} (Reset Context) | {C_YELLOW}/exit{C_RESET}      │")
+    print(f"├────────────────────────────────────────────────────────────────────────┤")
+    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/add <file>{C_RESET} (Add context) | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/undo{C_RESET} | {C_YELLOW}!cmd{C_RESET} (Run shell)  │")
+    print(f"│               {C_YELLOW}/files{C_RESET} (List context)   | {C_YELLOW}/help{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/menu{C_RESET} | {C_YELLOW}/exit{C_RESET}    │")
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     if is_70b and vram_mb < 44000:
@@ -277,7 +539,7 @@ def run_chat_session(model_name):
         print(f"{C_YELLOW}└──────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
 
     history = [
-        {"role": "system", "content": "You are a helpful expert local AI running on bare-metal hardware via Colibristream. Be concise, fast, and write clean code."}
+        {"role": "system", "content": build_system_prompt()}
     ]
 
     while True:
@@ -299,10 +561,45 @@ def run_chat_session(model_name):
             sys.exit(42)  # Special exit code to tell caller to reopen menu
 
         if prompt == "/clear":
-            history = [history[0]]
+            history = [{"role": "system", "content": build_system_prompt()}]
             print(f"{C_YELLOW}✔ Conversation context cleared.{C_RESET}")
             continue
 
+        if prompt in ("/help", "/h", "?"):
+            print_coding_agent_help()
+            continue
+
+        if prompt.startswith("/add ") or prompt.startswith("/a "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                add_file_to_context(parts[1].strip())
+            continue
+
+        if prompt.startswith("/drop ") or prompt.startswith("/rm "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                drop_file_from_context(parts[1].strip())
+            continue
+
+        if prompt in ("/files", "/ls"):
+            list_context_files()
+            continue
+
+        if prompt in ("/diff",):
+            show_git_diff()
+            continue
+
+        if prompt in ("/undo",):
+            undo_last_change()
+            continue
+
+        if prompt.startswith("/run ") or prompt.startswith("!"):
+            cmd_to_run = prompt[5:].strip() if prompt.startswith("/run ") else prompt[1:].strip()
+            execute_shell_command(cmd_to_run, history)
+            continue
+
+        # Keep system prompt completely synced with current workspace files
+        history[0]["content"] = build_system_prompt()
         history.append({"role": "user", "content": prompt})
 
         if is_70b:
@@ -314,6 +611,11 @@ def run_chat_session(model_name):
 
         print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{status_hint}", end="", flush=True)
         response_text, speed, tokens = stream_chat(model_name, history)
+        if response_text:
+            history.append({"role": "assistant", "content": response_text})
+            # Autonomous Aider-style File Modification Engine
+            apply_model_edits(response_text)
+
         if speed > 0:
             if speed < 0.2:
                 speed_str = f"{speed:.2f} tok/s {C_YELLOW}[!] Critically slow: GPU bottleneck or running on secondary slow card / CPU swap{C_RESET}"
