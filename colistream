@@ -59,23 +59,36 @@ ensure_backend() {
   export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on older motherboards
   export OLLAMA_MAX_PARALLEL_DOWNLOADS=16 # 16 parallel multi-threaded chunks for saturating gigabit downloads
 
+  # Auto-bind to active fast GPU
+  if [ -z "$ACTIVE_GPU" ]; then
+    if [ -f "${HOME}/.colistream/gpu_config" ]; then
+      ACTIVE_GPU=$(cat "${HOME}/.colistream/gpu_config" 2>/dev/null | tr -d '[:space:]')
+    fi
+  fi
+  if [ -n "$ACTIVE_GPU" ] && [ "$ACTIVE_GPU" != "all" ]; then
+    export CUDA_VISIBLE_DEVICES="$ACTIVE_GPU"
+  fi
+
   # Auto-configure systemd service if running with root/sudo permissions
   if [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]; then
-    if [ ! -f /etc/systemd/system/ollama.service.d/colistream.conf ]; then
-      mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
-      cat << 'SYSCONF' > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+    local env_cuda=""
+    if [ -n "$ACTIVE_GPU" ] && [ "$ACTIVE_GPU" != "all" ]; then
+      env_cuda="Environment=\"CUDA_VISIBLE_DEVICES=${ACTIVE_GPU}\""
+    fi
+    mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
+    cat << SYSCONF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
 [Service]
+${env_cuda}
 Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
 Environment="OLLAMA_FLASH_ATTENTION=0"
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="GGML_CUDA_NO_PINNED=1"
 SYSCONF
-      systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
   if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo -e "${C_YELLOW}[*] Starting local inference daemon (16-thread High-Speed Turbo mode)...${C_RESET}"
+    echo -e "${C_YELLOW}[*] Starting local inference daemon (Fast GPU: ${ACTIVE_GPU:-0})...${C_RESET}"
     if command -v ollama >/dev/null 2>&1; then
       nohup ollama serve >/dev/null 2>&1 &
       sleep 2
@@ -96,6 +109,12 @@ TOTAL_MEM_GB=""
 AVAIL_MEM_GB=""
 GPU_COUNT=0
 GPU_LIST=()
+GPU_INDICES=()
+GPU_NAMES=()
+GPU_MEMS=()
+BEST_GPU_IDX=0
+MAX_GPU_MEM=0
+ACTIVE_GPU=""
 DISK_SPEED=""
 DISK_HEADROOM=""
 
@@ -118,18 +137,34 @@ run_hardware_scan() {
   TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
   AVAIL_MEM_GB=$((AVAIL_MEM_KB / 1024 / 1024))
 
-  # GPU Multi-device Detection
+  # GPU Multi-device Detection & Auto-Isolation
   GPU_COUNT=0
   GPU_LIST=()
+  GPU_INDICES=()
+  GPU_NAMES=()
+  GPU_MEMS=()
+  BEST_GPU_IDX=0
+  MAX_GPU_MEM=0
+
   if command -v nvidia-smi >/dev/null 2>&1; then
-    while IFS=, read -r gname gmem; do
-      if [ -n "$gname" ]; then
+    while IFS=, read -r gidx gname gmem; do
+      if [ -n "$gidx" ]; then
+        c_idx=$(echo "$gidx" | tr -d '[:space:]')
+        c_name=$(echo "$gname" | sed -e 's/^[ \t]*//;s/[ \t]*$//')
+        c_mem=$(echo "$gmem" | tr -d '[:space:]' | tr -d 'MiB' | tr -d 'MB')
+        
         GPU_COUNT=$((GPU_COUNT + 1))
-        clean_name=$(echo "$gname" | sed -e 's/^[ \t]*//')
-        clean_mem=$(echo "$gmem" | sed -e 's/^[ \t]*//')
-        GPU_LIST+=("${clean_name} [${clean_mem}]")
+        GPU_INDICES+=("$c_idx")
+        GPU_NAMES+=("$c_name")
+        GPU_MEMS+=("$c_mem")
+        GPU_LIST+=("${c_name} [${c_mem} MB]")
+        
+        if [ "$c_mem" -gt "$MAX_GPU_MEM" ] 2>/dev/null; then
+          MAX_GPU_MEM="$c_mem"
+          BEST_GPU_IDX="$c_idx"
+        fi
       fi
-    done < <(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true)
+    done < <(nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)
   fi
 
   if [ "$GPU_COUNT" -eq 0 ] && command -v rocm-smi >/dev/null 2>&1; then
@@ -150,6 +185,20 @@ run_hardware_scan() {
     done < <(lspci 2>/dev/null | grep -i -E "vga compatible controller|3d controller|display controller" || true)
   fi
 
+  # Determine Active GPU (Auto-Isolate Fast Card on Multi-GPU rigs)
+  GPU_CONFIG_FILE="${HOME}/.colistream/gpu_config"
+  mkdir -p "${HOME}/.colistream" 2>/dev/null || true
+  if [ -f "$GPU_CONFIG_FILE" ]; then
+    ACTIVE_GPU=$(cat "$GPU_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
+  else
+    if [ "$GPU_COUNT" -gt 1 ]; then
+      ACTIVE_GPU="$BEST_GPU_IDX"
+      echo "$ACTIVE_GPU" > "$GPU_CONFIG_FILE" 2>/dev/null || true
+    else
+      ACTIVE_GPU="0"
+    fi
+  fi
+
   DISK_HEADROOM=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
   DISK_SPEED="2.3 GB/s Direct I/O"
 }
@@ -166,15 +215,134 @@ print_telemetry_box() {
   elif [ "$GPU_COUNT" -eq 1 ]; then
     printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "[GPU 0] ${GPU_LIST[0]}"
   else
-    printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Multi-Card Mode)"
-    for idx in "${!GPU_LIST[@]}"; do
-      dev_entry="[GPU $idx] ${GPU_LIST[$idx]}"
-      printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "" "$dev_entry"
+    printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Auto-Isolating Fast Card)"
+    for i in "${!GPU_INDICES[@]}"; do
+      idx="${GPU_INDICES[$i]}"
+      name="${GPU_NAMES[$i]}"
+      mem="${GPU_MEMS[$i]}"
+      if [ "$ACTIVE_GPU" = "all" ]; then
+        status="${C_GREEN}★ [ACTIVE]${C_RESET}"
+      elif [ "$ACTIVE_GPU" = "$idx" ]; then
+        status="${C_GREEN}★ [ACTIVE FAST CARD]${C_RESET}"
+      else
+        status="${C_DIM}(BYPASSED SLOW CARD)${C_RESET}"
+      fi
+      printf "│   ${C_BOLD}[GPU %s]${C_RESET} %-20.20s [%5s MB] %-28b │\n" "$idx" "$name" "$mem" "$status"
     done
   fi
 
   printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
   echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}"
+}
+
+apply_gpu_configuration() {
+  local target_gpu="$1"
+  mkdir -p "${HOME}/.colistream" 2>/dev/null || true
+  echo "$target_gpu" > "${HOME}/.colistream/gpu_config" 2>/dev/null || true
+
+  if [ "$target_gpu" = "all" ]; then
+    unset CUDA_VISIBLE_DEVICES
+    echo -e "${C_CYAN}[*] Multi-Card mode selected. All GPUs will be utilized.${C_RESET}"
+  else
+    export CUDA_VISIBLE_DEVICES="$target_gpu"
+    echo -e "${C_GREEN}[*] Pinned execution strictly to GPU ${target_gpu}. Slower cards bypassed!${C_RESET}"
+  fi
+
+  # Auto-update systemd service drop-in if root or sudo available
+  local env_cuda=""
+  if [ "$target_gpu" != "all" ]; then
+    env_cuda="Environment=\"CUDA_VISIBLE_DEVICES=${target_gpu}\""
+  fi
+
+  if [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]; then
+    mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
+    cat << EOF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+[Service]
+${env_cuda}
+Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
+Environment="OLLAMA_FLASH_ATTENTION=0"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="GGML_CUDA_NO_PINNED=1"
+EOF
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart ollama >/dev/null 2>&1 || true
+    echo -e "${C_GREEN}✔ System inference daemon reloaded and locked to GPU ${target_gpu}.${C_RESET}"
+  else
+    # User-space daemon restart
+    if pkill -f "ollama serve" 2>/dev/null; then
+      sleep 1
+      nohup ollama serve >/dev/null 2>&1 &
+      sleep 2
+      echo -e "${C_GREEN}✔ Background inference daemon restarted on GPU ${target_gpu}.${C_RESET}"
+    else
+      echo -e "${C_YELLOW}[!] Note: If Ollama runs as a system service, run this once to lock it to GPU ${target_gpu}:${C_RESET}"
+      echo -e "    ${C_BOLD}sudo systemctl set-environment CUDA_VISIBLE_DEVICES=${target_gpu} && sudo systemctl restart ollama${C_RESET}"
+    fi
+  fi
+}
+
+cmd_switch_gpu() {
+  local target_arg="$1"
+  run_hardware_scan
+
+  if [ -n "$target_arg" ]; then
+    ACTIVE_GPU="$target_arg"
+    apply_gpu_configuration "$ACTIVE_GPU"
+    return
+  fi
+
+  if [ "$GPU_COUNT" -le 1 ]; then
+    echo -e "${C_YELLOW}[*] Only 1 GPU detected (${GPU_NAMES[0]:-GPU 0}). No secondary card to switch.${C_RESET}"
+    read_input "Press Enter to return to menu: " _
+    return
+  fi
+
+  echo -e "\n${C_BOLD}┌── SELECT ACTIVE GPU ACCELERATOR ──────────────────────────────────┐${C_RESET}"
+  echo -e "│ ${C_YELLOW}Direct inference to your fastest card & isolate slower cards        │${C_RESET}"
+  echo -e "├───────────────────────────────────────────────────────────────────┤"
+  for i in "${!GPU_INDICES[@]}"; do
+    idx="${GPU_INDICES[$i]}"
+    name="${GPU_NAMES[$i]}"
+    mem="${GPU_MEMS[$i]}"
+    mem_gb=$((mem / 1024))
+    tag=""
+    if [ "$idx" = "$ACTIVE_GPU" ]; then
+      tag="${C_GREEN}★ [ACTIVE]${C_RESET}"
+    fi
+    if [ "$idx" = "$BEST_GPU_IDX" ]; then
+      tag="${tag} ${C_CYAN}(Recommended: Largest VRAM)${C_RESET}"
+    fi
+    printf "│  ${C_BOLD}[%s]${C_RESET} %-28.28s [%5d MB / %2d GB] %-18b │\n" "$idx" "$name" "$mem" "$mem_gb" "$tag"
+  done
+  echo -e "│                                                                   │"
+  all_tag=""
+  if [ "$ACTIVE_GPU" = "all" ]; then all_tag="${C_GREEN}★ [ACTIVE]${C_RESET}"; fi
+  printf "│  ${C_BOLD}[a]${C_RESET} %-28.28s %-20s %-18b │\n" "All GPUs (Multi-Card Mode)" "" "$all_tag"
+  echo -e "├───────────────────────────────────────────────────────────────────┤"
+  echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Cancel / Keep Current Setting${C_RESET}                               │"
+  echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
+
+  read_input "${C_BOLD}Select GPU index to activate (e.g., 0, 1, or 'a' for all): ${C_RESET}" gpu_sel
+  case "$gpu_sel" in
+    q|Q|"")
+      return
+      ;;
+    a|A|all)
+      ACTIVE_GPU="all"
+      ;;
+    *)
+      if [[ "$gpu_sel" =~ ^[0-9]+$ ]]; then
+        ACTIVE_GPU="$gpu_sel"
+      else
+        echo -e "${C_RED}Invalid GPU selection.${C_RESET}"
+        sleep 1
+        return
+      fi
+      ;;
+  esac
+
+  apply_gpu_configuration "$ACTIVE_GPU"
+  read_input "Press Enter to return to menu: " _
 }
 
 cmd_list() {
@@ -860,11 +1028,14 @@ EOF
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Big Free AI Hub Catalog${C_RESET} (Browse All 25+ Models by Family)     │"
     echo -e "│      → DeepSeek, Qwen, Llama, Mistral, Gemma, Phi                  │"
+    echo -e "│                                                                   │"
+    echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow Card)  │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream gpu <id|all>${C_RESET}                         │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-6] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1-6, g] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       1)
@@ -889,13 +1060,16 @@ EOF
       6|7)
         cmd_big_catalog
         ;;
+      g|G|gpu|gpus)
+        cmd_switch_gpu
+        ;;
       q|Q|exit)
         echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
         exit 0
         ;;
       *)
         if [ -n "$CHOICE" ]; then
-          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6 or q.${C_RESET}"
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6, g, or q.${C_RESET}"
           sleep 1
         fi
         ;;
@@ -923,10 +1097,13 @@ case "$1" in
   catalog)
     cmd_big_catalog
     ;;
+  gpu|gpus)
+    cmd_switch_gpu "$2"
+    ;;
   menu|"")
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm <model1> [model2]|build|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm <model1> [model2]|gpu [id]|build|list|catalog]"
     ;;
 esac
