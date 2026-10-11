@@ -410,10 +410,15 @@ cmd_big_catalog() {
     echo -e "    54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB RAM)${C_RESET}"
     echo -e "    55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB RAM)${C_RESET}\n"
 
-    read_input "${C_BOLD}Select model number (e.g. 11, 22, 33) or 'b' for Back: ${C_RESET}" SUB_CHOICE
+    read_input "${C_BOLD}Select model number (e.g. 11, 22, 33), 'b' for Back, or 'q' to Quit: ${C_RESET}" SUB_CHOICE
 
-    if [ "$SUB_CHOICE" = "b" ] || [ "$SUB_CHOICE" = "B" ] || [ "$SUB_CHOICE" = "back" ]; then
+    if [ "$SUB_CHOICE" = "b" ] || [ "$SUB_CHOICE" = "B" ] || [ "$SUB_CHOICE" = "back" ] || [ "$SUB_CHOICE" = "menu" ]; then
       return
+    fi
+
+    if [ "$SUB_CHOICE" = "q" ] || [ "$SUB_CHOICE" = "Q" ] || [ "$SUB_CHOICE" = "exit" ] || [ "$SUB_CHOICE" = "quit" ]; then
+      echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
+      exit 0
     fi
 
     TARGET_MODEL=""
@@ -453,12 +458,16 @@ cmd_big_catalog() {
     esac
 
     echo -e "\n${C_GREEN}${C_BOLD}Selected Model:${C_RESET} ${C_BOLD}${TARGET_MODEL}${C_RESET}"
-    echo -e "${C_YELLOW}Copy-Paste Command to run anytime:${C_RESET}"
-    echo -e "  ${C_BOLD}${C_WHITE}./colibri run ${TARGET_MODEL}${C_RESET}\n"
+    echo -e "${C_YELLOW}Direct Command to run anytime:${C_RESET}"
+    echo -e "  ${C_BOLD}${C_WHITE}colibri run ${TARGET_MODEL}${C_RESET}\n"
 
-    read_input "${C_BOLD}Press Enter to boot chat now, or 'b' for menu [Enter/b]: ${C_RESET}" ACTION
+    read_input "${C_BOLD}Press Enter to boot chat, 'b' for catalog, or 'q' to Quit [Enter/b/q]: ${C_RESET}" ACTION
     if [ "$ACTION" = "b" ] || [ "$ACTION" = "B" ]; then
       continue
+    fi
+    if [ "$ACTION" = "q" ] || [ "$ACTION" = "Q" ] || [ "$ACTION" = "exit" ] || [ "$ACTION" = "quit" ]; then
+      echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
+      exit 0
     fi
     cmd_run "$TARGET_MODEL"
   done
