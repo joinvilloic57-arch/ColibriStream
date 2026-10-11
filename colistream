@@ -699,28 +699,20 @@ EOF
 
     case "$CHOICE" in
       1)
-        echo -e "\n${C_CYAN}[*] Extreme 72B Swarm (Qwen 72B + 1.5B Coder) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm qwen2.5:72b qwen2.5-coder:1.5b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen2.5:72b" "qwen2.5-coder:1.5b"; fi
+        echo -e "\n${C_CYAN}[*] Launching Extreme 72B Swarm (Qwen 72B + 1.5B Coder)...${C_RESET}"
+        cmd_swarm "qwen2.5:72b" "qwen2.5-coder:1.5b"
         ;;
       2)
-        echo -e "\n${C_CYAN}[*] Instant Local Swarm (Qwen3 14B + 1.5B Coder) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "qwen3:14b" "qwen2.5-coder:1.5b"; fi
+        echo -e "\n${C_CYAN}[*] Launching Instant Local Swarm (Qwen3 14B + 1.5B Coder)...${C_RESET}"
+        cmd_swarm "qwen3:14b" "qwen2.5-coder:1.5b"
         ;;
       3)
-        echo -e "\n${C_CYAN}[*] DeepSeek MoE Swarm selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream swarm deepseek-r1:14b deepseek-coder:6.7b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to boot swarm now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"; fi
+        echo -e "\n${C_CYAN}[*] Launching DeepSeek MoE Swarm...${C_RESET}"
+        cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"
         ;;
       4)
-        echo -e "\n${C_CYAN}[*] Single Big Model (Qwen 2.5 72B) selected.${C_RESET}"
-        echo -e "${C_YELLOW}Direct command:${C_RESET} ${C_BOLD}colistream run qwen2.5:72b${C_RESET}\n"
-        read_input "${C_BOLD}Press Enter to launch chat now (or 'b' for menu): ${C_RESET}" CONF
-        if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then cmd_run "qwen2.5:72b"; fi
+        echo -e "\n${C_CYAN}[*] Launching Single Big Model (Qwen 2.5 72B)...${C_RESET}"
+        cmd_run "qwen2.5:72b"
         ;;
       5)
         cmd_swarm_builder
