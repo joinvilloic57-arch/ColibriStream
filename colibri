@@ -242,6 +242,11 @@ C_YELLOW = "\033[38;5;220m"
 C_GRAY = "\033[38;5;244m"
 
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
+    import os
+    cpu_threads = max(1, os.cpu_count() or 4)
+    # Don't exceed memory bus saturation (sweet spot is 8-16 threads for LLM memory bandwidth)
+    opt_threads = min(cpu_threads, 16)
+    
     payload = {
         "model": model_name,
         "messages": messages,
@@ -249,7 +254,8 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
         "options": {
             "temperature": 0.7,
             "num_gpu": 99,
-            "num_ctx": 4096
+            "num_thread": opt_threads,
+            "num_ctx": 2048
         }
     }
     data = json.dumps(payload).encode("utf-8")
