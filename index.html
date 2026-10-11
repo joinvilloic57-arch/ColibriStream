@@ -168,7 +168,7 @@
     function getCommand() {
       const origin = window.location.origin;
       if (origin && (origin.includes("localhost") || origin.includes("10.0.") || origin.includes("127.0.0.1") || origin.includes(":8888"))) {
-        return `curl -fsSL ${origin}/launch.sh | bash`;
+        return `curl -fsSL ${origin}/install.sh | bash`;
       }
       return "curl -fsSL https://colibristream.run | bash";
     }
