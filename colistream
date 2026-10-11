@@ -281,6 +281,29 @@ EOF
   fi
 }
 
+cmd_restart_engine() {
+  run_hardware_scan
+  local target_gpu="${1:-$BEST_GPU_IDX}"
+  echo -e "${C_CYAN}[*] Restarting inference engine and binding strictly to Fast GPU ${target_gpu}...${C_RESET}"
+  
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active ollama >/dev/null 2>&1; then
+    echo -e "${C_YELLOW}[!] Ollama is currently active as a system service.${C_RESET}"
+    if sudo -n true 2>/dev/null; then
+      sudo systemctl stop ollama 2>/dev/null || true
+      echo -e "${C_GREEN}✔ Stopped systemd service to allow user-space fast GPU binding.${C_RESET}"
+    else
+      echo -e "${C_YELLOW}[!] Run: ${C_BOLD}sudo systemctl stop ollama${C_RESET} if it holds port 11434 on the slow GPU.${C_RESET}"
+    fi
+  fi
+
+  pkill -9 -f "ollama serve" 2>/dev/null || true
+  sleep 1
+
+  apply_gpu_configuration "$target_gpu"
+  ensure_backend
+  echo -e "${C_GREEN}✔ Local inference engine restarted and locked to GPU ${target_gpu}!${C_RESET}"
+}
+
 cmd_switch_gpu() {
   local target_arg="$1"
   run_hardware_scan
@@ -1327,10 +1350,13 @@ case "$1" in
   diag|doctor)
     cmd_diag
     ;;
+  restart|rebind|reset)
+    cmd_restart_engine "$2"
+    ;;
   menu|"")
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|diag|gpu [id]|swarm <m1> [m2]|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|diag|gpu [id]|restart [id]|list|catalog]"
     ;;
 esac
