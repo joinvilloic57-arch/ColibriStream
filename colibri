@@ -172,9 +172,49 @@ cmd_pull() {
     echo -e "${C_RED}[ERROR] Specify a model name. Example: colistream pull qwen2.5-coder:7b${C_RESET}"
     exit 1
   fi
-  echo -e "${C_CYAN}[*] Pulling model: ${C_BOLD}${model}${C_RESET} to local bare-metal hub..."
-  ollama pull "$model"
-  echo -e "${C_GREEN}✔ Model ${model} is ready for execution.${C_RESET}"
+  echo -e "${C_CYAN}[*] Contacting Bare-Metal Hub for: ${C_BOLD}${model}${C_RESET}..."
+  
+  python3 -c "
+import urllib.request, json, sys, time
+
+model_name = sys.argv[1]
+url = 'http://localhost:11434/api/pull'
+req = urllib.request.Request(
+    url,
+    data=json.dumps({'name': model_name, 'stream': True}).encode('utf-8'),
+    headers={'Content-Type': 'application/json'}
+)
+
+try:
+    with urllib.request.urlopen(req) as resp:
+        for line in resp:
+            data = json.loads(line.decode('utf-8'))
+            status = data.get('status', '')
+            total = data.get('total', 0)
+            completed = data.get('completed', 0)
+            
+            if total > 0:
+                pct = int((completed / total) * 100)
+                gb_done = completed / (1024**3)
+                gb_tot = total / (1024**3)
+                bar_len = 25
+                filled = int(bar_len * completed // total)
+                bar = '█' * filled + '░' * (bar_len - filled)
+                sys.stdout.write(f'\r\033[38;5;48m[\033[38;5;220m{bar}\033[38;5;48m]\033[0m \033[1m{pct:3d}%\033[0m ({gb_done:5.2f}/{gb_tot:5.2f} GB) - \033[38;5;45m{status:<22}\033[0m')
+                sys.stdout.flush()
+            else:
+                if status and status != 'success':
+                    sys.stdout.write(f'\r\033[38;5;244m[*] {status:<60}\033[0m')
+                    sys.stdout.flush()
+            if status == 'success':
+                sys.stdout.write('\r\033[K')
+                print(f'\033[38;5;48m\033[1m✔ Model {model_name} downloaded & verified on disk!\033[0m')
+                break
+except Exception as e:
+    print(f'\n\033[38;5;196m[ERROR] Failed to pull {model_name}: {e}\033[0m')
+    sys.exit(1)
+" "$model"
+
 }
 
 write_inline_chat_script() {
