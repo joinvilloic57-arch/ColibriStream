@@ -120,12 +120,24 @@ if [ "$ELAPSED_MS" -le 0 ]; then ELAPSED_MS=120; fi
 echo -e "${C_GREEN}✔ Telemetry scan completed in ${C_CYAN}${ELAPSED_MS}ms${C_RESET}\n"
 
 echo -e "${C_BOLD}┌── HOST HARDWARE TELEMETRY ────────────────────────────────────────┐${C_RESET}"
-printf "│ %-16s : ${C_CYAN}%-47s${C_RESET} │\n" "CPU Architecture" "$CPU_ARCH ($CPU_CORES Cores, $NUMA_NODES NUMA Nodes)"
-printf "│ %-16s : ${C_CYAN}%-47s${C_RESET} │\n" "Processor" "$CPU_MODEL"
-printf "│ %-16s : ${C_GREEN}%-47s${C_RESET} │\n" "Vector ISA" "${SIMD_FEATURES[*]}"
-printf "│ %-16s : ${C_CYAN}%-47s${C_RESET} │\n" "System Memory" "${TOTAL_MEM_GB} GB Total (Available: ${AVAIL_MEM_GB} GB)"
-printf "│ %-16s : ${C_CYAN}%-47s${C_RESET} │\n" "GPU / VRAM Pool" "${GPU_INFO:0:47}"
-printf "│ %-16s : ${C_GREEN}%-47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
+printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "CPU Architecture" "$CPU_ARCH ($CPU_CORES Cores, $NUMA_NODES NUMA Nodes)"
+printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "Processor" "$CPU_MODEL"
+printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "Vector ISA" "${SIMD_FEATURES[*]}"
+printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "System Memory" "${TOTAL_MEM_GB} GB Total (Available: ${AVAIL_MEM_GB} GB)"
+
+if [ "$GPU_COUNT" -eq 0 ]; then
+  printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "None (Host RAM / NUMA Unified Pool)"
+elif [ "$GPU_COUNT" -eq 1 ]; then
+  printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "[GPU 0] ${GPU_LIST[0]}"
+else
+  printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Multi-Card Mode)"
+  for idx in "${!GPU_LIST[@]}"; do
+    dev_entry="[GPU $idx] ${GPU_LIST[$idx]}"
+    printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "" "$dev_entry"
+  done
+fi
+
+printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
 echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
 # --- Phase 3 & 4: Swarm & Model Selector ---
