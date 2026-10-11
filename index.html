@@ -155,30 +155,26 @@
     <div class="command-box">
       <div class="command-text" id="cmdText">
         <span class="prompt-sym">$</span>
-        <span>curl -fsSL https://colibristream.run | bash</span>
+        <span>curl -fsSL https://raw.githubusercontent.com/joinvilloic57/colibristream/main/install.sh | bash</span>
       </div>
       <button class="copy-btn" id="copyBtn" onclick="copyCommand()">Copy</button>
     </div>
 
-    <p class="caption">Paste into your terminal to launch</p>
+    <p class="caption">Paste into your terminal to launch on any computer</p>
   </div>
 
   <script>
-    // Dynamically adapt the command to the current host if running locally
+    const PUBLIC_INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/joinvilloic57/colibristream/main/install.sh | bash";
+
     function getCommand() {
-      const origin = window.location.origin;
-      if (origin && (origin.includes("localhost") || origin.includes("10.0.") || origin.includes("127.0.0.1") || origin.includes(":8888"))) {
-        return `curl -fsSL ${origin}/install.sh | bash`;
-      }
-      return "curl -fsSL https://colibristream.run | bash";
+      return PUBLIC_INSTALL_CMD;
     }
 
-    // Set command on load
+    // Set universal command on load
     document.addEventListener("DOMContentLoaded", () => {
-      const cmd = getCommand();
       const codeSpan = document.querySelector("#cmdText span:last-child");
       if (codeSpan) {
-        codeSpan.innerText = cmd;
+        codeSpan.innerText = PUBLIC_INSTALL_CMD;
       }
     });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Colistream — 1-Line Universal Installer for ANY Computer
-# Usage: curl -fsSL http://10.0.2.235:8888/install.sh | bash
+# Colibristream (colistream) — 1-Line Universal Installer for ANY Computer
+# Usage: curl -fsSL https://raw.githubusercontent.com/joinvilloic57/colibristream/main/install.sh | bash
 # ==============================================================================
 set -e
 
@@ -17,10 +17,8 @@ mkdir -p "$INSTALL_DIR"
 
 echo -e "\n${C_GREEN}${C_BOLD}Installing colistream onto your computer...${C_RESET}"
 
-# Download latest colistream binary
-SERVER="http://10.0.2.235:8888"
-curl -fsSL "${SERVER}/colistream" -o "${INSTALL_DIR}/colistream" || \
-curl -fsSL "https://raw.githubusercontent.com/joinvilloic57/colibristream/main/colistream" -o "${INSTALL_DIR}/colistream"
+# Download standalone installer from public GitHub repository
+exec curl -fsSL "https://raw.githubusercontent.com/joinvilloic57/colibristream/main/install.sh" | bash -s -- "$@"
 
 chmod +x "${INSTALL_DIR}/colistream"
 ln -sf "${INSTALL_DIR}/colistream" "${INSTALL_DIR}/colibristream"
