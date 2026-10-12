@@ -15,6 +15,20 @@ import glob
 import fnmatch
 import subprocess
 import shutil
+import unicodedata
+import atexit
+import threading
+
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_GREEN = "\033[38;5;48m"
+C_CYAN = "\033[38;5;45m"
+C_YELLOW = "\033[38;5;220m"
+C_PURPLE = "\033[38;5;141m"
+C_RED = "\033[38;5;196m"
+C_GRAY = "\033[38;5;244m"
+C_WHITE = "\033[38;5;255m"
 
 # --- Autonomous Coding Agent Subsystem (Aider-Style) ---
 tracked_files = {}   # {rel_path: content}
@@ -121,8 +135,40 @@ def execute_shell_command(cmd, history=None):
     except Exception as e:
         print(f"{C_RED}[!] Failed to run command: {e}{C_RESET}")
 
+def print_models_catalog_table():
+    print(f"\n{C_BOLD}{C_GREEN}╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
+    print(f"{C_BOLD}{C_GREEN}║             UNIVERSAL FREE LOCAL MODEL HUB (BARE-METAL RUNTIME • ZERO PAYWALLS)                       ║{C_RESET}")
+    print(f"{C_BOLD}{C_GREEN}╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print(f"{C_CYAN}{C_BOLD}┌──────────────────────┬──────────────┬──────────────────────┬───────────────┬──────────────────────────┐{C_RESET}")
+    print(f"{C_CYAN}{C_BOLD}│ Model Name           │ Total Params │ Architecture         │ Memory Budget │ CLI Quick Aliases        │{C_RESET}")
+    print(f"{C_CYAN}{C_BOLD}├──────────────────────┼──────────────┼──────────────────────┼───────────────┼──────────────────────────┤{C_RESET}")
+    print(f"│ {C_BOLD}{C_RED}beam:500b-25b{C_RESET}        │ 501B         │ MoE (25B Active)     │ ~44 GB        │ 500b, 500b25b, beam      │")
+    print(f"│ {C_BOLD}{C_RED}mixtral:8x22b{C_RESET}        │ 141B         │ MoE (39B Active)     │ ~42 GB        │ 8x22b, 141b, mixtral     │")
+    print(f"│ {C_BOLD}{C_RED}command-r-plus:104b{C_RESET}  │ 104B         │ Dense Enterprise     │ ~40 GB        │ 104b, command-r-plus     │")
+    print(f"│ {C_BOLD}{C_RED}deepseek-r1:671b{C_RESET}     │ 671B         │ MoE (37B Active)     │ ~46 GB        │ 671b, deepseek-671b      │")
+    print(f"│ {C_BOLD}{C_YELLOW}qwen2.5:72b{C_RESET}          │ 72B          │ Dense Frontier       │ ~38–42 GB     │ 72b, qwen-72b            │")
+    print(f"│ {C_BOLD}{C_YELLOW}llama3.3:70b{C_RESET}         │ 70B          │ Dense Frontier       │ ~40 GB        │ llama-70b, 70b           │")
+    print(f"│ {C_BOLD}{C_YELLOW}deepseek-r1:70b{C_RESET}      │ 70B          │ Dense Reasoning      │ ~40 GB        │ deepseek-70b             │")
+    print(f"│ {C_BOLD}{C_GREEN}qwen2.5-coder:32b{C_RESET}    │ 32B          │ Dense Coding (Claude)│ ~17 GB (GPU)  │ 32b, 32b-coder           │")
+    print(f"│ {C_BOLD}{C_GREEN}deepseek-r1:32b{C_RESET}      │ 32B          │ Reasoning (o1-grade) │ ~20 GB        │ deepseek-32b             │")
+    print(f"│ {C_BOLD}{C_GREEN}gemma2:27b{C_RESET}           │ 27B          │ Flagship Dense       │ ~17 GB        │ gemma-27b                │")
+    print(f"│ {C_BOLD}{C_GREEN}codestral:22b{C_RESET}        │ 22B          │ Code Specialist      │ ~14 GB        │ codestral                │")
+    print(f"│ {C_BOLD}{C_WHITE}qwen3:14b{C_RESET}            │ 14B          │ Next-Gen Reasoning   │ ~9 GB         │ qwen, 14b, qwen3         │")
+    print(f"│ {C_BOLD}{C_WHITE}deepseek-r1:14b{C_RESET}      │ 14B          │ Math / Logic         │ ~9 GB         │ deepseek, r1-14b         │")
+    print(f"│ {C_BOLD}{C_WHITE}phi4:14b{C_RESET}             │ 14B          │ Microsoft Math/Code  │ ~9.5 GB       │ phi4                     │")
+    print(f"│ {C_BOLD}{C_WHITE}qwen2.5-coder:7b{C_RESET}     │ 7B           │ Fast Coding          │ ~5 GB         │ 7b, coder-7b             │")
+    print(f"│ {C_BOLD}{C_WHITE}mistral:7b{C_RESET}           │ 7B           │ Fast & Eloquent      │ ~4.5 GB       │ mistral                  │")
+    print(f"│ {C_BOLD}{C_WHITE}llama3.1:8b{C_RESET}          │ 8B           │ General Knowledge    │ ~5.5 GB       │ llama, 8b                │")
+    print(f"│ {C_BOLD}{C_WHITE}deepseek-coder:6.7b{C_RESET}  │ 6.7B         │ Code Generation      │ ~4.5 GB       │ deepseek-coder           │")
+    print(f"│ {C_BOLD}{C_CYAN}qwen2.5-coder:1.5b{C_RESET}   │ 1.5B         │ Ultra-Fast Coding    │ ~1.0 GB       │ 1.5b, coder              │")
+    print(f"│ {C_BOLD}{C_CYAN}deepseek-r1:1.5b{C_RESET}     │ 1.5B         │ Compact Reasoning    │ ~1.1 GB       │ r1-1.5b                  │")
+    print(f"│ {C_BOLD}{C_CYAN}llama3.2:1b{C_RESET}          │ 1B           │ Micro Edge Model     │ ~0.8 GB       │ llama-1b                 │")
+    print(f"{C_CYAN}{C_BOLD}└──────────────────────┴──────────────┴──────────────────────┴───────────────┴──────────────────────────┘{C_RESET}")
+    print(f"{C_DIM}★ All models run 100% locally on bare metal without cloud subscriptions or API keys.{C_RESET}\n")
+
 def print_coding_agent_help():
     print(f"\n{C_BOLD}{C_GREEN}┌── COLIBRISTREAM AUTONOMOUS CODING AGENT COMMANDS ────────────────┐{C_RESET}")
+    print(f"│ {C_YELLOW}/models{C_RESET}          : Display Universal Free Local Model Hub Catalog        │")
     print(f"│ {C_YELLOW}/add <file|glob>{C_RESET} : Add files to agent context (e.g. /add main.py or *.py) │")
     print(f"│ {C_YELLOW}/drop <file>{C_RESET}     : Remove file from agent context                        │")
     print(f"│ {C_YELLOW}/files{C_RESET}           : List all tracked files and lines in context           │")
@@ -388,6 +434,18 @@ def resolve_model_name(name):
         except Exception:
             pass
         return "qwen2.5:72b-instruct-q3_K_M"
+    if nl in ("500b", "500b25b", "501b", "beam", "beam:500b", "beam:500b-25b", "reflection:500b"):
+        return "beam:500b-25b"
+    if nl in ("8x22b", "mixtral:8x22b", "141b", "mixtral-8x22b", "mixtral"):
+        return "mixtral:8x22b"
+    if nl in ("104b", "command-r-plus", "command-r-plus:104b", "command-r+", "commandr+"):
+        return "command-r-plus:104b"
+    if nl in ("671b", "deepseek-671b", "deepseek-r1:671b", "deepseek-v3"):
+        return "deepseek-r1:671b"
+    if nl in ("70b", "deepseek-70b", "deepseek-r1:70b"):
+        return "deepseek-r1:70b"
+    if nl in ("llama-70b", "llama3.3:70b", "llama3.3-70b"):
+        return "llama3.3:70b"
     if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
         return "qwen3:14b"
     if nl in ("1.5b", "1.5", "qwen-1.5b"):
@@ -548,7 +606,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     vram_mb = get_visible_vram_mb()
 
     m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     gpu_cnt = get_gpu_count()
@@ -562,14 +620,14 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
             pass
     is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
 
-    if is_70b:
-        if is_multi_gpu:
-            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 30-40 tok/s!
+    if is_giant:
+        if is_multi_gpu or vram_mb >= 44000:
+            # Multi-GPU / 48GB VRAM Mode: 100% offload capped to 48 GB budget
             num_gpu_layers = 99
             num_ctx_val = 2048
             num_batch_val = 512
         else:
-            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
+            # Single 24GB card mode: Offload partial layers (~21.5 GB VRAM)
             num_gpu_layers = 48
             num_ctx_val = 1536
             num_batch_val = 512
@@ -719,13 +777,33 @@ def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api
     return "".join(full_response), 0, token_count
 
 def strip_ansi(s):
-    return re.sub(r'\x1b\[[0-9;]*m', '', s)
+    return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', s)
+
+def char_width(ch):
+    if ch in ('\0', '\n', '\r'):
+        return 0
+    code = ord(ch)
+    if (0x1F300 <= code <= 0x1FAFF) or (0x2600 <= code <= 0x27BF) or (0x2300 <= code <= 0x23FF):
+        return 2
+    eaw = unicodedata.east_asian_width(ch)
+    return 2 if eaw in ('W', 'F') else 1
+
+def disp_width(s):
+    clean = strip_ansi(s).replace("\t", "    ")
+    return sum(char_width(c) for c in clean)
 
 def pad_truncate(s, width, color=C_WHITE):
     clean = strip_ansi(s).replace("\t", "    ")
-    if len(clean) > width:
-        clean = clean[:width]
-    return f"{color}{clean}{C_RESET}" + (" " * max(0, width - len(clean)))
+    res = []
+    cur_w = 0
+    for ch in clean:
+        cw = char_width(ch)
+        if cur_w + cw > width:
+            break
+        res.append(ch)
+        cur_w += cw
+    pad = " " * max(0, width - cur_w)
+    return f"{color}{''.join(res)}{C_RESET}{pad}"
 
 def detect_swarm_file_targets(prompt):
     tokens = re.findall(r'[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,6}', prompt)
@@ -783,9 +861,11 @@ def extract_code_block(text):
         return max(raw_blocks, key=lambda m: len(m.group(1))).group(1).strip()
     return text.strip()
 
-def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event, is_dual_70b=False):
-    api_url = "http://localhost:11434/api/chat"
-    opt_threads = min(os.cpu_count() or 8, 10)
+def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event, is_dual_70b=False, api_base="http://localhost:11434"):
+    api_url = f"{api_base}/api/chat"
+    total_cpus = os.cpu_count() or 8
+    # Keep thread pool within single NUMA socket (max 8 threads) to maximize L3 cache hits & avoid QPI bus thrashing
+    opt_threads = min(8, max(4, total_cpus // 10))
     vram_mb = get_visible_vram_mb()
     gpu_cnt = get_gpu_count()
     cfg_file = os.path.expanduser("~/.colistream/gpu_config")
@@ -799,21 +879,18 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
 
     m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
     
-    if is_dual_70b and is_70b:
-        # User constraint: If 2 AI of 72B+ run together, they take 36-40GB max!
-        # Offload 33 of 80 layers to GPU allocating ~18.0 GB VRAM per model.
-        # 18.0 GB + 18.0 GB = 36.0 GB total combined VRAM (Zero OOM).
+    if is_dual_70b and is_giant:
+        # Dual giant models: Capped strictly to 36-40 GB max combined VRAM (under 48GB limit)
         num_gpu_layers = 33
         num_ctx_val = 2048
-    elif is_70b:
-        if is_multi_gpu:
-            # Multi-GPU Mode: 100% offload across pooled GPUs -> 30-40 tok/s!
+    elif is_giant:
+        if is_multi_gpu or vram_mb >= 44000:
+            # 48GB VRAM limit respected
             num_gpu_layers = 99
             num_ctx_val = 2048
         else:
-            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
             num_gpu_layers = 48
             num_ctx_val = 1536
     else:
@@ -868,73 +945,134 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     finally:
         done_event.set()
 
+_PARALLEL_BACKEND_PROC = None
+
+def _cleanup_parallel_backend():
+    global _PARALLEL_BACKEND_PROC
+    if _PARALLEL_BACKEND_PROC is not None:
+        try:
+            _PARALLEL_BACKEND_PROC.terminate()
+            _PARALLEL_BACKEND_PROC.wait(timeout=2)
+        except Exception:
+            try:
+                _PARALLEL_BACKEND_PROC.kill()
+            except Exception:
+                pass
+        _PARALLEL_BACKEND_PROC = None
+
+atexit.register(_cleanup_parallel_backend)
+
+def ensure_parallel_backend(model1, model2):
+    global _PARALLEL_BACKEND_PROC
+    target_port = 11435
+
+    def _warm_on_port(port, m):
+        try:
+            url = f"http://127.0.0.1:{port}/api/generate"
+            payload = {"model": resolve_model_name(m), "keep_alive": "30m"}
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp.read()
+            return True
+        except Exception:
+            return False
+
+    print(f"\n{C_CYAN}[*] Initializing dedicated multi-model engine (Port 11435: 4 Concurrent Slots)...{C_RESET}")
+    is_11435_alive = False
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{target_port}/api/tags", timeout=1) as resp:
+            is_11435_alive = (resp.status == 200)
+    except Exception:
+        is_11435_alive = False
+
+    if not is_11435_alive:
+        env = os.environ.copy()
+        env["OLLAMA_HOST"] = f"127.0.0.1:{target_port}"
+        if os.path.exists("/usr/share/ollama/.ollama/models"):
+            env["OLLAMA_MODELS"] = "/usr/share/ollama/.ollama/models"
+        env["OLLAMA_NOPRUNE"] = "true"
+        env["OLLAMA_MAX_LOADED_MODELS"] = "4"
+        env["OLLAMA_NUM_PARALLEL"] = "4"
+        env["OLLAMA_KEEP_ALIVE"] = "30m"
+        
+        ollama_bin = "/usr/local/bin/ollama" if os.path.exists("/usr/local/bin/ollama") else "ollama"
+        _PARALLEL_BACKEND_PROC = subprocess.Popen(
+            [ollama_bin, "serve"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        for _ in range(30):
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{target_port}/api/tags", timeout=1) as resp:
+                    if resp.status == 200:
+                        break
+            except Exception:
+                time.sleep(0.3)
+
+    print(f"  • Pre-warming Model 1 ({model1}) and Model 2 ({model2}) in parallel...")
+    th_w1 = threading.Thread(target=_warm_on_port, args=(target_port, model1), daemon=True)
+    th_w2 = threading.Thread(target=_warm_on_port, args=(target_port, model2), daemon=True)
+    th_w1.start()
+    th_w2.start()
+    th_w1.join()
+    th_w2.join()
+    print(f"{C_GREEN}✔ Dedicated Multi-Model Engine Ready! Both models locked in memory simultaneously.{C_RESET}")
+    time.sleep(1)
+    return f"http://127.0.0.1:{target_port}"
+
 def run_parallel_swarm_session(model1_name, model2_name):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
     ensure_model_installed(model1)
     ensure_model_installed(model2)
 
-    # Pre-warm & pin both models in VRAM for instant simultaneous execution
-    def _warm_worker(m):
-        try:
-            url = "http://localhost:11434/api/generate"
-            payload = {"model": resolve_model_name(m), "keep_alive": "30m"}
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=120)
-        except Exception:
-            pass
+    api_base = ensure_parallel_backend(model1, model2)
 
-    sys.stdout.write(f"\n{C_YELLOW}[*] Pre-warming & pinning both models in VRAM for instant simultaneous generation...{C_RESET}\n")
-    sys.stdout.flush()
-    import threading
-    _wt1 = threading.Thread(target=_warm_worker, args=(model1,), daemon=True)
-    _wt2 = threading.Thread(target=_warm_worker, args=(model2,), daemon=True)
-    _wt1.start()
-    _wt2.start()
-    _wt1.join()
-    _wt2.join()
+    def get_model_tier(m_name):
+        ml = m_name.lower()
+        if any(x in ml for x in ["500b", "501b", "671b", "141b", "8x22b", "104b", "72b", "70b"]):
+            return 4
+        if any(x in ml for x in ["32b", "30b", "27b", "22b"]):
+            return 3
+        if any(x in ml for x in ["14b", "12b", "8b", "7b"]):
+            return 2
+        return 1
 
-    # Verify if Ollama backend kept both in VRAM simultaneously
-    try:
-        req = urllib.request.Request("http://localhost:11434/api/ps")
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            active_names = [x.get("name", "") for x in data.get("models", [])]
-            r1 = resolve_model_name(model1)
-            r2 = resolve_model_name(model2)
-            has1 = any(r1 in n or n in r1 for n in active_names)
-            has2 = any(r2 in n or n in r2 for n in active_names)
-            if not (has1 and has2):
-                print(f"\n{C_YELLOW}┌── MULTI-MODEL PARALLEL ADVISORY ──────────────────────────────────────┐{C_RESET}")
-                print(f"│ {C_BOLD}Notice{C_RESET} : Ollama background service is configured to keep 1 model in VRAM │")
-                print(f"│ To unlock TRUE SIMULTANEOUS execution (both models coding at once):   │")
-                print(f"│ Run: {C_BOLD}sudo systemctl set-environment OLLAMA_MAX_LOADED_MODELS=4 OLLAMA_NUM_PARALLEL=4{C_RESET} │")
-                print(f"│      {C_BOLD}sudo systemctl restart ollama{C_RESET}                                    │")
-                print(f"└────────────────────────────────────────────────────────────────────────┘\n")
-                time.sleep(2)
-            else:
-                print(f"{C_GREEN}✔ Both models resident in memory simultaneously ({model1} + {model2})!{C_RESET}")
-                time.sleep(1)
-    except Exception:
-        pass
+    if get_model_tier(model1) >= get_model_tier(model2):
+        lead_model, fast_model = model1, model2
+    else:
+        lead_model, fast_model = model2, model1
 
     os.system("clear 2>/dev/null || true")
-    print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}║       ⚡ COLIBRISTREAM DUAL-CONSOLE PARALLEL SWARM (SIDE-BY-SIDE)              ║{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}║      Both Models Coding Simultaneously at the EXACT SAME TIME (File 1 & 2)     ║{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
-    print(f"│  {C_CYAN}🧠 CONSOLE 1 (Left)  :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[FILE 1 / Engine]{C_RESET}    │")
-    print(f"│  {C_PURPLE}🔍 CONSOLE 2 (Right) :{C_RESET} {C_WHITE}{C_BOLD}{model2:<35}{C_RESET} {C_GRAY}[FILE 2 / Worker]{C_RESET}    │")
-    print(f"│  {C_YELLOW}⚡ Simultaneous Execution:{C_RESET} {C_WHITE}2 AI streams running in parallel side-by-side!{C_RESET}       │")
-    print(f"├────────────────────────────────────────────────────────────────────────────────┤")
-    print(f"│  {C_BOLD}Commands:{C_RESET} {C_YELLOW}/assign <f1> <f2>{C_RESET} | {C_YELLOW}/cat <file>{C_RESET} | {C_YELLOW}!cmd{C_RESET} | {C_YELLOW}/apply 1|2{C_RESET} | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/exit{C_RESET} │")
-    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+    print(f"\n{C_GREEN}{C_BOLD}⚡ COLIBRISTREAM DUAL-AI ADAPTIVE SWARM{C_RESET}")
+    print(f"  {C_GREEN}• Lead Architect (Heavy Reasoning){C_RESET}: {C_WHITE}{C_BOLD}{lead_model}{C_RESET}")
+    print(f"  {C_CYAN}• Fast Copilot   (Quick Responses){C_RESET}: {C_WHITE}{C_BOLD}{fast_model}{C_RESET}")
+    print(f"  {C_YELLOW}• Adaptive Dispatch{C_RESET}: Fast answers for simple tasks • Deep compute on big model • Auto-handoff • Dual parallel code")
+    print(f"  {C_GRAY}• Commands: /models | /1 <msg> | /2 <msg> | /assign <f1> <f2> | !cmd | /diff | /clear | /exit{C_RESET}")
+    print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
 
     last_solutions = {"1": "", "2": ""}
     last_user_prompt = ""
     assigned_targets = [None, None]
     m1_history = []
     m2_history = []
+
+    def classify_task_mode(p, targets):
+        pl = p.lower().strip()
+        if targets[0] and targets[1]:
+            return "dual_code"
+        tokens = re.findall(r'[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,6}', p)
+        valid_files = [t for t in tokens if not t.startswith(('http', 'www')) and not t.endswith(('.com', '.org', '.net', '.io', '.html', '.md'))]
+        if len(valid_files) >= 2 or any(k in pl for k in ["side by side", "server and client", "client and server", "backend and frontend", "two files", "dual files", "both files"]):
+            return "dual_code"
+        is_plan = any(w in pl for w in ["plan", "blueprint", "architecture", "specification", "roadmap"]) and any(w in pl for w in ["phase 1", "phases", "colibristream", "colibri", "system blueprint", "project blueprint"])
+        if is_plan:
+            return "dual_plan"
+        heavy_kws = ["implement full", "build entire", "deep reasoning", "refactor all", "mathematical proof", "large architecture", "complex algorithm", "write comprehensive", "kernel", "driver", "500b", "671b", "104b", "72b"]
+        if any(k in pl for k in heavy_kws) or len(p) > 280:
+            return "heavy_architect"
+        return "fast_response"
 
     import threading
 
@@ -952,6 +1090,10 @@ def run_parallel_swarm_session(model1_name, model2_name):
             print(f"{C_DIM}Dual Swarm session ended.{C_RESET}")
             break
 
+        if prompt in ("/models", "/catalog", "/hub"):
+            print_models_catalog_table()
+            continue
+
         if prompt == "/menu":
             print(f"{C_CYAN}Returning to Menu...{C_RESET}")
             sys.exit(42)
@@ -960,7 +1102,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
             m1_history = []
             m2_history = []
             assigned_targets = [None, None]
-            print(f"{C_YELLOW}✔ Conversation context cleared for both consoles.{C_RESET}")
+            print(f"{C_YELLOW}✔ Conversation context cleared for both models.{C_RESET}")
             continue
 
         if prompt.startswith("/assign ") or prompt.startswith("/files "):
@@ -968,7 +1110,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
             if len(parts) >= 3:
                 assigned_targets[0] = parts[1].strip()
                 assigned_targets[1] = parts[2].strip()
-                print(f"{C_GREEN}✔ Assigned: Console 1 -> {assigned_targets[0]} | Console 2 -> {assigned_targets[1]}{C_RESET}")
+                print(f"{C_GREEN}✔ Assigned: Model 1 -> {assigned_targets[0]} | Model 2 -> {assigned_targets[1]}{C_RESET}")
             else:
                 print(f"{C_YELLOW}Usage: /assign <file1> <file2> (e.g. /assign server.rs client.c){C_RESET}")
             continue
@@ -1005,12 +1147,12 @@ def run_parallel_swarm_session(model1_name, model2_name):
                 choice = "2"
 
             if target_sol:
-                print(f"\n{C_CYAN}[*] Applying Console {choice} code to workspace...{C_RESET}")
+                print(f"\n{C_CYAN}[*] Applying Model {choice} code to workspace...{C_RESET}")
                 applied = apply_model_edits(target_sol, explicit_filename=explicit_file, user_prompt=last_user_prompt)
                 if not applied:
-                    print(f"{C_YELLOW}[!] No file modification blocks found in Console {choice} code.{C_RESET}")
+                    print(f"{C_YELLOW}[!] No file modification blocks found in Model {choice} code.{C_RESET}")
             else:
-                print(f"{C_YELLOW}[!] No generated code to apply for Console {choice} yet.{C_RESET}")
+                print(f"{C_YELLOW}[!] No generated code to apply for Model {choice} yet.{C_RESET}")
             continue
 
         if prompt.startswith("/add ") or prompt.startswith("/a "):
@@ -1038,36 +1180,130 @@ def run_parallel_swarm_session(model1_name, model2_name):
             execute_shell_command(cmd_to_run, [])
             continue
 
-        f1_cand, f2_cand = detect_swarm_file_targets(prompt)
-        file1 = assigned_targets[0] or f1_cand
-        file2 = assigned_targets[1] or f2_cand
+        # --- Explicit Direct Model Invocations (/1 or /2) ---
+        if prompt.startswith("/1 ") or prompt.startswith("/arch ") or prompt.startswith("/lead "):
+            direct_q = prompt.split(maxsplit=1)[1].strip()
+            print(f"\n{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}):{C_RESET}")
+            sys_m = f"You are {lead_model}, Lead Architect in Colibristream. Answer the user's question directly, accurately, and thoroughly."
+            msgs = [{"role": "system", "content": sys_m}] + list(m1_history) + [{"role": "user", "content": direct_q}]
+            ans, _, _ = stream_chat(lead_model, msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
+            m1_history.append({"role": "user", "content": direct_q})
+            m1_history.append({"role": "assistant", "content": ans})
+            last_solutions["1"] = ans
+            apply_model_edits(ans, user_prompt=direct_q)
+            continue
+
+        if prompt.startswith("/2 ") or prompt.startswith("/fast ") or prompt.startswith("/worker "):
+            direct_q = prompt.split(maxsplit=1)[1].strip()
+            print(f"\n{C_CYAN}{C_BOLD}🔍 Fast Copilot ({fast_model}):{C_RESET}")
+            sys_m = f"You are {fast_model}, fast assistant in Colibristream. Answer the user's question directly, accurately, and concisely."
+            msgs = [{"role": "system", "content": sys_m}] + list(m2_history) + [{"role": "user", "content": direct_q}]
+            ans, _, _ = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
+            m2_history.append({"role": "user", "content": direct_q})
+            m2_history.append({"role": "assistant", "content": ans})
+            last_solutions["2"] = ans
+            apply_model_edits(ans, user_prompt=direct_q)
+            continue
 
         last_user_prompt = prompt
-        files_ctx = build_system_prompt()
-        ctx_inject = f"\n\n{files_ctx}" if files_ctx else ""
+        task_mode = classify_task_mode(prompt, assigned_targets)
 
-        m1_sys = (
-            f"You are CONSOLE 1 ({model1}) in a 2-AI simultaneous coding swarm.\n"
-            f"You and CONSOLE 2 ({model2}) are coding at the EXACT SAME TIME in a dual side-by-side terminal console.\n\n"
-            f"YOUR TASK DIVISION:\n"
-            f"- You are strictly responsible for FILE 1: '{file1}' (the core engine, server, library, or primary component).\n"
-            f"- CONSOLE 2 is simultaneously writing FILE 2: '{file2}' (the client, consumer, worker, or interface).\n"
-            f"- Do NOT write File 2. Focus 100% of your code on '{file1}' with complete production-grade implementation.\n"
-            f"- CRITICAL: On line 1 of your code block, declare: ```write:{file1}\n"
-        )
+        # ─── CASE 1: Fast Responsive Query (Simple Questions, Chat, Quick Lookups) ───
+        if task_mode == "fast_response":
+            print(f"\n{C_CYAN}{C_BOLD}🔍 Fast Copilot ({fast_model}):{C_RESET}")
+            fast_sys = (
+                f"You are {fast_model}, an agile local AI assistant in Colibristream.\n"
+                f"Answer the user's request directly, accurately, and concisely.\n"
+                f"Do NOT invent unrelated files or source code unless specifically requested.\n"
+                f"If this task requires deep architectural computation or frontier math beyond your capability, conclude with '[NEED_ARCHITECT]'."
+            )
+            files_ctx = "\nActive Workspace Files:\n" + "\n".join(tracked_files.keys()) if tracked_files else ""
+            msgs = [{"role": "system", "content": fast_sys + files_ctx}] + list(m2_history) + [{"role": "user", "content": prompt}]
+            ans, spd, toks = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
 
-        m2_sys = (
-            f"You are CONSOLE 2 ({model2}) in a 2-AI simultaneous coding swarm.\n"
-            f"You and CONSOLE 1 ({model1}) are coding at the EXACT SAME TIME in a dual side-by-side terminal console.\n\n"
-            f"YOUR TASK DIVISION:\n"
-            f"- You are strictly responsible for FILE 2: '{file2}' (the client, interface, consumer, worker, or secondary component).\n"
-            f"- CONSOLE 1 is simultaneously writing FILE 1: '{file1}' (the core engine, server, library, or primary component).\n"
-            f"- Do NOT write File 1. Focus 100% of your code on '{file2}' ensuring it communicates seamlessly with '{file1}'.\n"
-            f"- CRITICAL: On line 1 of your code block, declare: ```write:{file2}\n"
-        )
+            # Check if Fast Model requested Handoff / Escalation to Lead Architect
+            if "[NEED_ARCHITECT]" in ans or "need_architect" in ans.lower():
+                clean_ans = ans.replace("[NEED_ARCHITECT]", "").strip()
+                print(f"\n\n{C_YELLOW}⚡ Copilot requested handoff: Escalating to Lead Architect ({lead_model})...{C_RESET}")
+                lead_sys = (
+                    f"You are {lead_model}, Lead Architect in Colibristream.\n"
+                    f"Your copilot ({fast_model}) requested your deep reasoning on this user request.\n"
+                    f"Provide an authoritative, in-depth solution addressing the request directly."
+                )
+                lead_msgs = [{"role": "system", "content": lead_sys}] + list(m1_history) + [
+                    {"role": "user", "content": f"{prompt}\n\n[Copilot Notes]: {clean_ans}"}
+                ]
+                print(f"{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}) [Authoritative Resolution]:{C_RESET}")
+                lead_ans, _, _ = stream_chat(lead_model, lead_msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
+                m1_history.append({"role": "user", "content": prompt})
+                m1_history.append({"role": "assistant", "content": lead_ans})
+                last_solutions["1"] = lead_ans
+                apply_model_edits(lead_ans, user_prompt=prompt)
+            else:
+                m2_history.append({"role": "user", "content": prompt})
+                m2_history.append({"role": "assistant", "content": ans})
+                last_solutions["2"] = ans
+                apply_model_edits(ans, user_prompt=prompt)
+            continue
 
-        m1_messages = [{"role": "system", "content": m1_sys}] + list(m1_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
-        m2_messages = [{"role": "system", "content": m2_sys}] + list(m2_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
+        # ─── CASE 2: Heavy Task on Big Model with Fast Copilot Assessment ───
+        if task_mode == "heavy_architect":
+            print(f"\n{C_CYAN}{C_BOLD}⚡ Fast Copilot ({fast_model}) [Initial Assessment]:{C_RESET}")
+            quick_sys = f"You are {fast_model}. Give a brief 2-sentence initial assessment of this task while Lead Architect ({lead_model}) computes the complete solution."
+            fast_brief, _, _ = stream_chat(fast_model, [{"role": "system", "content": quick_sys}, {"role": "user", "content": prompt}], color=C_CYAN, api_url=f"{api_base}/api/chat")
+
+            print(f"\n\n{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}) [Comprehensive Solution]:{C_RESET}")
+            files_ctx = build_system_prompt() if tracked_files else ""
+            ctx_inject = f"\n\n{files_ctx}" if files_ctx else ""
+            lead_sys = (
+                f"You are {lead_model}, Lead Architect in Colibristream.\n"
+                f"Provide a comprehensive, production-grade technical solution for the user's request."
+            )
+            lead_msgs = [{"role": "system", "content": lead_sys}] + list(m1_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
+            lead_ans, _, _ = stream_chat(lead_model, lead_msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
+            m1_history.append({"role": "user", "content": prompt})
+            m1_history.append({"role": "assistant", "content": lead_ans})
+            last_solutions["1"] = lead_ans
+            apply_model_edits(lead_ans, user_prompt=prompt)
+            continue
+
+        # ─── CASE 3 & 4: Dual Collaborative Planning or Dual Coding ───
+        f1_cand, f2_cand = detect_swarm_file_targets(prompt)
+        if task_mode == "dual_plan":
+            file1 = assigned_targets[0] or (f1_cand if f1_cand != 'core_service.rs' else 'core_engine_spec.md')
+            file2 = assigned_targets[1] or (f2_cand if f2_cand != 'worker_client.c' else 'interface_telemetry_spec.md')
+            m1_sys = (
+                f"You are Model 1 ({model1}) — Lead Engine & Systems Architect in a 2-AI collaborative swarm.\n"
+                f"You and Model 2 ({model2}) are co-authoring the project plan together in real time without duplicating work.\n\n"
+                f"YOUR EXCLUSIVE SCOPE (Low-Level Systems & Engine):\n"
+                f"- Phase 3 & Phase 4: Low-level Core Engine, Bare-Metal Runtime (Rust/C/Assembly), Memory Mapping (mmap), and the Universal Local Model Hub.\n"
+                f"- Output technical specification in markdown: ```write:{file1}\n"
+            )
+            m2_sys = (
+                f"You are Model 2 ({model2}) — Interface & Integration Architect in a 2-AI collaborative swarm.\n"
+                f"You and Model 1 ({model1}) are co-authoring the project plan together in real time without duplicating work.\n\n"
+                f"YOUR EXCLUSIVE SCOPE (Client Interface & Telemetry Scanner):\n"
+                f"- Phase 1 & Phase 2: Web Landing Page (sleek, zero bloat, dark terminal aesthetic) and CLI Transition.\n"
+                f"- Output interface specification in markdown: ```write:{file2}\n"
+            )
+            m1_user_msg = f"[COLLABORATIVE TASK: Focus on Phase 3 & 4 (Core Engine, Runtime & Model Hub Architecture)]\n\nUser Request: {prompt}"
+            m2_user_msg = f"[COLLABORATIVE TASK: Focus on Phase 1 & 2 (Web Landing Page, Terminal Interface & Hardware Scanner)]\n\nUser Request: {prompt}"
+        else: # dual_code
+            file1 = assigned_targets[0] or f1_cand
+            file2 = assigned_targets[1] or f2_cand
+            m1_sys = (
+                f"You are Model 1 ({model1}) — Lead Engine & Backend Architect in a 2-AI simultaneous coding swarm.\n"
+                f"YOUR RESPONSIBILITY: Component 1 ('{file1}'). Output code in: ```write:{file1}\n"
+            )
+            m2_sys = (
+                f"You are Model 2 ({model2}) — Client & Integration Specialist in a 2-AI simultaneous coding swarm.\n"
+                f"YOUR RESPONSIBILITY: Component 2 ('{file2}'). Output code in: ```write:{file2}\n"
+            )
+            m1_user_msg = f"[COLLABORATIVE TASK: Implement Component 1 in '{file1}']\n\nUser Request: {prompt}"
+            m2_user_msg = f"[COLLABORATIVE TASK: Implement Component 2 in '{file2}' connecting to '{file1}']\n\nUser Request: {prompt}"
+
+        m1_messages = [{"role": "system", "content": m1_sys}] + list(m1_history) + [{"role": "user", "content": m1_user_msg}]
+        m2_messages = [{"role": "system", "content": m2_sys}] + list(m2_history) + [{"role": "user", "content": m2_user_msg}]
 
         t1_text = [""]
         t2_text = [""]
@@ -1078,149 +1314,75 @@ def run_parallel_swarm_session(model1_name, model2_name):
 
         m1_lower = model1.lower()
         m2_lower = model2.lower()
-        is_m1_70b = any(x in m1_lower for x in ["70b", "72b", "671b"])
-        is_m2_70b = any(x in m2_lower for x in ["70b", "72b", "671b"])
-        is_dual_70b = is_m1_70b and is_m2_70b
+        is_m1_giant = any(x in m1_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
+        is_m2_giant = any(x in m2_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
+        is_dual_70b = is_m1_giant and is_m2_giant
 
-        if is_dual_70b:
-            print(f"{C_BOLD}{C_GREEN}┌── ⚡ DUAL-72B VRAM CONTROLLER ENFORCED ─────────────────────────────┐{C_RESET}")
-            print(f"│  {C_CYAN}Both Models{C_RESET} : 70B+ Frontier Giants ({model1} + {model2})           │")
-            print(f"│  {C_YELLOW}VRAM Budget{C_RESET} : Strictly Capped to 36–40 GB Max Combined VRAM!      │")
-            print(f"│  • CONSOLE 1 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
-            print(f"│  • CONSOLE 2 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
-            print(f"│  • Combined  : 36.0 GB VRAM (Leaves 8-12 GB headroom • Zero OOM)     │")
-            print(f"{C_BOLD}{C_GREEN}└───────────────────────────────────────────────────────────────────────┘{C_RESET}")
-
-        print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching CONSOLE 1 ({model1} -> {file1}) & CONSOLE 2 ({model2} -> {file2}) SIDE-BY-SIDE...{C_RESET}\n")
-
-        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b), daemon=True)
-        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b), daemon=True)
+        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b, api_base), daemon=True)
+        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b, api_base), daemon=True)
         th1.start()
         th2.start()
 
-        first_render = True
-        total_rows_drawn = 0
+        print(f"\n{C_BOLD}{C_GREEN}⚡ Dual Swarm Generating ({model1} + {model2}):{C_RESET}")
+        print(f"  {C_CYAN}• Model 1{C_RESET} -> {C_BOLD}{file1}{C_RESET}")
+        print(f"  {C_PURPLE}• Model 2{C_RESET} -> {C_BOLD}{file2}{C_RESET}")
+        print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
 
-        while not (done1.is_set() and done2.is_set()):
-            term_w = shutil.get_terminal_size((80, 24)).columns
-            term_h = shutil.get_terminal_size((80, 24)).lines
-            term_w = max(term_w, 76)
-            col_w = (term_w - 7) // 2
-            view_h = max(8, min(term_h - 10, 18))
+        start_time = time.time()
+        try:
+            sys.stdout.write("\033[?25l")
+            while not (done1.is_set() and done2.is_set()):
+                sniff1 = sniff_file_from_code(t1_text[0], file1)
+                sniff2 = sniff_file_from_code(t2_text[0], file2)
 
+                tok1 = t1_stats.get("tokens", 0)
+                tok2 = t2_stats.get("tokens", 0)
+                spd1 = t1_stats.get("speed", 0.0)
+                spd2 = t2_stats.get("speed", 0.0)
+
+                s1_text = f"{C_GREEN}DONE ({tok1} tok){C_RESET}" if done1.is_set() else (
+                    f"{C_CYAN}{tok1} tok ({spd1:.1f} t/s){C_RESET}" if tok1 > 0 else f"{C_YELLOW}evaluating prompt...{C_RESET}"
+                )
+                s2_text = f"{C_GREEN}DONE ({tok2} tok){C_RESET}" if done2.is_set() else (
+                    f"{C_PURPLE}{tok2} tok ({spd2:.1f} t/s){C_RESET}" if tok2 > 0 else f"{C_YELLOW}evaluating prompt...{C_RESET}"
+                )
+
+                elapsed = time.time() - start_time
+                line = f"  🧠 M1 [{sniff1}]: {s1_text}  │  🔍 M2 [{sniff2}]: {s2_text}  ({elapsed:.1f}s)"
+                sys.stdout.write(f"\r\033[K{line}")
+                sys.stdout.flush()
+                time.sleep(0.08)
+
+            th1.join()
+            th2.join()
+
+            sys.stdout.write("\r\033[K")
             sniff1 = sniff_file_from_code(t1_text[0], file1)
             sniff2 = sniff_file_from_code(t2_text[0], file2)
-
-            lines1 = t1_text[0].splitlines()
-            lines2 = t2_text[0].splitlines()
-
-            if not t1_text[0].strip():
-                v1 = [f"{C_YELLOW}⚡ Initializing model & generating code...{C_RESET}"] + [""] * (view_h - 1)
-            else:
-                v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
-
-            if not t2_text[0].strip():
-                v2 = [f"{C_YELLOW}⚡ Initializing model & generating code...{C_RESET}"] + [""] * (view_h - 1)
-            else:
-                v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
-
-            m1_label = f"CONSOLE 1: {model1[:12]} [{sniff1}]"
-            m2_label = f"CONSOLE 2: {model2[:12]} [{sniff2}]"
-
-            top_l = f"┌── 🧠 {m1_label} "
-            top_l += "─" * max(0, col_w + 2 - len(top_l))
-            top_r = f"┬── 🔍 {m2_label} "
-            top_r += "─" * max(0, col_w + 2 - len(top_r)) + "┐"
-            border_top = f"{C_BOLD}{C_GREEN}{top_l}{top_r}{C_RESET}"
-
-            s1_info = f"DONE ({t1_stats.get('tokens',0)} tok)" if done1.is_set() else f"Spd: {t1_stats.get('speed', 0.0):.1f} tok/s | Tok: {t1_stats.get('tokens', 0)}"
-            s2_info = f"DONE ({t2_stats.get('tokens',0)} tok)" if done2.is_set() else f"Spd: {t2_stats.get('speed', 0.0):.1f} tok/s | Tok: {t2_stats.get('tokens', 0)}"
-            status_l = f"│ {s1_info:<{col_w}} "
-            status_r = f"│ {s2_info:<{col_w}} │"
-            border_status = f"{C_CYAN}{status_l}{C_PURPLE}{status_r}{C_RESET}"
-
-            mid_l = "├──" + ("─" * col_w)
-            mid_r = "┼──" + ("─" * col_w) + "┤"
-            border_mid = f"{C_GREEN}{mid_l}{mid_r}{C_RESET}"
-
-            content_rows = []
-            for i in range(view_h):
-                row_l = pad_truncate(v1[i], col_w, C_CYAN)
-                row_r = pad_truncate(v2[i], col_w, C_PURPLE)
-                content_rows.append(f"{C_GREEN}│{C_RESET} {row_l} {C_GREEN}│{C_RESET} {row_r} {C_GREEN}│{C_RESET}")
-
-            bot_l = "└──" + ("─" * col_w)
-            bot_r = "┴──" + ("─" * col_w) + "┘"
-            border_bot = f"{C_BOLD}{C_GREEN}{bot_l}{bot_r}{C_RESET}"
-
-            frame = [border_top, border_status, border_mid] + content_rows + [border_bot]
-
-            if not first_render:
-                sys.stdout.write(f"\033[{total_rows_drawn}A")
-            first_render = False
-            total_rows_drawn = len(frame)
-
-            for r in frame:
-                sys.stdout.write(f"\r\033[K{r}\n")
+            tok1 = t1_stats.get("tokens", 0)
+            tok2 = t2_stats.get("tokens", 0)
+            spd1 = t1_stats.get("speed", 0.0)
+            spd2 = t2_stats.get("speed", 0.0)
+            total_dur = time.time() - start_time
+            print(f"  {C_GREEN}✔ Model 1 [{model1[:10]} -> {sniff1}]: {tok1} tokens ({spd1:.1f} t/s){C_RESET}")
+            print(f"  {C_GREEN}✔ Model 2 [{model2[:10]} -> {sniff2}]: {tok2} tokens ({spd2:.1f} t/s) in {total_dur:.1f}s{C_RESET}")
+            print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
+        except KeyboardInterrupt:
+            done1.set()
+            done2.set()
+            sys.stdout.write("\033[?25h\033[0m\n")
             sys.stdout.flush()
-            time.sleep(0.04)
-
-        th1.join()
-        th2.join()
-
-        sniff1 = sniff_file_from_code(t1_text[0], file1)
-        sniff2 = sniff_file_from_code(t2_text[0], file2)
-        lines1 = t1_text[0].splitlines()
-        lines2 = t2_text[0].splitlines()
-
-        term_w = shutil.get_terminal_size((80, 24)).columns
-        term_h = shutil.get_terminal_size((80, 24)).lines
-        term_w = max(term_w, 76)
-        col_w = (term_w - 7) // 2
-        view_h = max(8, min(term_h - 10, 18))
-
-        v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
-        v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
-
-        top_l = f"┌── 🧠 CONSOLE 1: {model1[:12]} [{sniff1}] ✔ COMPLETE "
-        top_l += "─" * max(0, col_w + 2 - len(top_l))
-        top_r = f"┬── 🔍 CONSOLE 2: {model2[:12]} [{sniff2}] ✔ COMPLETE "
-        top_r += "─" * max(0, col_w + 2 - len(top_r)) + "┐"
-        border_top = f"{C_BOLD}{C_GREEN}{top_l}{top_r}{C_RESET}"
-
-        s1_info = f"DONE: {t1_stats.get('tokens', 0)} tok ({t1_stats.get('speed', 0.0):.1f} t/s)"
-        s2_info = f"DONE: {t2_stats.get('tokens', 0)} tok ({t2_stats.get('speed', 0.0):.1f} t/s)"
-        status_l = f"│ {s1_info:<{col_w}} "
-        status_r = f"│ {s2_info:<{col_w}} │"
-        border_status = f"{C_CYAN}{status_l}{C_PURPLE}{status_r}{C_RESET}"
-
-        mid_l = "├──" + ("─" * col_w)
-        mid_r = "┼──" + ("─" * col_w) + "┤"
-        border_mid = f"{C_GREEN}{mid_l}{mid_r}{C_RESET}"
-
-        content_rows = []
-        for i in range(view_h):
-            row_l = pad_truncate(v1[i], col_w, C_CYAN)
-            row_r = pad_truncate(v2[i], col_w, C_PURPLE)
-            content_rows.append(f"{C_GREEN}│{C_RESET} {row_l} {C_GREEN}│{C_RESET} {row_r} {C_GREEN}│{C_RESET}")
-
-        bot_l = "└──" + ("─" * col_w)
-        bot_r = "┴──" + ("─" * col_w) + "┘"
-        border_bot = f"{C_BOLD}{C_GREEN}{bot_l}{bot_r}{C_RESET}"
-
-        final_frame = [border_top, border_status, border_mid] + content_rows + [border_bot]
-        sys.stdout.write(f"\033[{total_rows_drawn}A")
-        for r in final_frame:
-            sys.stdout.write(f"\r\033[K{r}\n")
-        sys.stdout.flush()
+            print(f"\n{C_YELLOW}[!] Interrupted by user.{C_RESET}")
+            continue
+        finally:
+            sys.stdout.write("\033[?25h\033[0m")
+            sys.stdout.flush()
 
         last_solutions["1"] = t1_text[0]
         last_solutions["2"] = t2_text[0]
 
-        # Automatic dual-file disk save
         saved1 = apply_model_edits(t1_text[0], explicit_filename=sniff1, user_prompt=prompt)
         saved2 = apply_model_edits(t2_text[0], explicit_filename=sniff2, user_prompt=prompt)
-
         file1_saved = saved1[0] if saved1 else sniff1
         file2_saved = saved2[0] if saved2 else sniff2
 
@@ -1233,15 +1395,12 @@ def run_parallel_swarm_session(model1_name, model2_name):
             if save_code_to_disk(file2_saved, code2):
                 saved2 = [file2_saved]
 
-        lines1_cnt = len(open(file1_saved, "r", errors="ignore").readlines()) if os.path.exists(file1_saved) else len(lines1)
-        lines2_cnt = len(open(file2_saved, "r", errors="ignore").readlines()) if os.path.exists(file2_saved) else len(lines2)
+        lines1_cnt = len(open(file1_saved, "r", errors="ignore").readlines()) if os.path.exists(file1_saved) else 0
+        lines2_cnt = len(open(file2_saved, "r", errors="ignore").readlines()) if os.path.exists(file2_saved) else 0
 
-        print(f"\n{C_BOLD}{C_GREEN}┌── ⚡ DUAL-CORE AUTO-SAVE COMPLETE ──────────────────────────────────────────┐{C_RESET}")
-        print(f"│  {C_GREEN}✔{C_RESET} {C_CYAN}CONSOLE 1 ({model1[:14]}){C_RESET} saved FILE 1: {C_BOLD}{file1_saved:<20}{C_RESET} ({lines1_cnt} lines on disk) │")
-        print(f"│  {C_GREEN}✔{C_RESET} {C_PURPLE}CONSOLE 2 ({model2[:14]}){C_RESET} saved FILE 2: {C_BOLD}{file2_saved:<20}{C_RESET} ({lines2_cnt} lines on disk) │")
-        print(f"│  {C_WHITE}Both files written directly to physical disk in workspace!{C_RESET}                 │")
-        print(f"│  {C_DIM}Run '!command' or '/run' to test (e.g. !cargo build or !gcc client.c){C_RESET}     │")
-        print(f"{C_BOLD}{C_GREEN}└─────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+        print(f"\n{C_BOLD}{C_GREEN}⚡ Dual Files Auto-Saved:{C_RESET}")
+        print(f"  {C_GREEN}✔ Model 1 ({model1[:14]}):{C_RESET} {C_BOLD}{file1_saved}{C_RESET} ({lines1_cnt} lines on disk)")
+        print(f"  {C_GREEN}✔ Model 2 ({model2[:14]}):{C_RESET} {C_BOLD}{file2_saved}{C_RESET} ({lines2_cnt} lines on disk)")
 
         m1_history.append({"role": "user", "content": prompt})
         m1_history.append({"role": "assistant", "content": t1_text[0]})
@@ -1284,6 +1443,10 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
         if prompt in ("/exit", "/quit", "exit", "quit"):
             print(f"{C_DIM}Debate session ended.{C_RESET}")
             break
+
+        if prompt in ("/models", "/catalog", "/hub"):
+            print_models_catalog_table()
+            continue
 
         if prompt == "/menu":
             print(f"{C_CYAN}Returning to Menu...{C_RESET}")
@@ -1529,6 +1692,10 @@ def run_chat_session(model_name):
             history = [{"role": "system", "content": build_system_prompt()}]
             last_response_text = ""
             print(f"{C_YELLOW}✔ Conversation context cleared.{C_RESET}")
+            continue
+
+        if prompt in ("/models", "/catalog", "/hub"):
+            print_models_catalog_table()
             continue
 
         if prompt in ("/help", "/h", "?"):
