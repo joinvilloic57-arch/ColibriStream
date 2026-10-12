@@ -410,7 +410,8 @@ def ensure_model_installed(model_name):
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
     model_name = resolve_model_name(model_name)
     cpu_threads = max(1, os.cpu_count() or 4)
-    opt_threads = min(cpu_threads, 16)
+    # On multi-socket NUMA systems, clamping to single-socket (8-10 cores) maximizes cache hits and throughput
+    opt_threads = min(cpu_threads, 10)
     vram_mb = get_visible_vram_mb()
 
     m_lower = model_name.lower()
