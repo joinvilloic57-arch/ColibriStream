@@ -68,6 +68,8 @@ ensure_backend() {
   fi
   if [ -n "$ACTIVE_GPU" ] && [ "$ACTIVE_GPU" != "all" ]; then
     export CUDA_VISIBLE_DEVICES="$ACTIVE_GPU"
+  elif [ "$ACTIVE_GPU" = "all" ]; then
+    unset CUDA_VISIBLE_DEVICES
   fi
 
   # Auto-configure systemd service if running with root/sudo permissions
@@ -227,7 +229,7 @@ run_hardware_scan() {
     ACTIVE_GPU=$(cat "$GPU_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
   else
     if [ "$GPU_COUNT" -gt 1 ]; then
-      ACTIVE_GPU="$BEST_GPU_IDX"
+      ACTIVE_GPU="all"
       echo "$ACTIVE_GPU" > "$GPU_CONFIG_FILE" 2>/dev/null || true
     else
       ACTIVE_GPU="0"
@@ -267,7 +269,11 @@ print_telemetry_box() {
   elif [ "$GPU_COUNT" -eq 1 ]; then
     printf "│ %-16s : ${C_CYAN}%-47.47s${C_RESET} │\n" "GPU Accelerator" "[GPU 0] ${GPU_LIST[0]}"
   else
-    printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Auto-Isolating Fast Card)"
+    if [ "$ACTIVE_GPU" = "all" ]; then
+      printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Pooled (${AVAILABLE_VRAM_GB} GB Total VRAM)"
+    else
+      printf "│ %-16s : ${C_YELLOW}%-47.47s${C_RESET} │\n" "GPU Cluster" "${GPU_COUNT} GPUs Active (Single Card Pinned)"
+    fi
     for i in "${!GPU_INDICES[@]}"; do
       idx="${GPU_INDICES[$i]}"
       name="${GPU_NAMES[$i]}"
@@ -337,16 +343,29 @@ EOF
 
 cmd_restart_engine() {
   run_hardware_scan
-  local target_gpu="${1:-$BEST_GPU_IDX}"
-  echo -e "${C_CYAN}[*] Restarting inference engine and binding strictly to Fast GPU ${target_gpu}...${C_RESET}"
+  local target_gpu="${1:-${ACTIVE_GPU:-all}}"
+  echo -e "${C_CYAN}[*] Restarting inference engine and binding to GPU configuration (${target_gpu})...${C_RESET}"
   
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active ollama >/dev/null 2>&1; then
     echo -e "${C_YELLOW}[!] Ollama is currently active as a system service.${C_RESET}"
     if sudo -n true 2>/dev/null; then
-      sudo systemctl stop ollama 2>/dev/null || true
-      echo -e "${C_GREEN}✔ Stopped systemd service to allow user-space fast GPU binding.${C_RESET}"
+      if [ "$target_gpu" = "all" ]; then
+        sudo systemctl unset-environment CUDA_VISIBLE_DEVICES 2>/dev/null || true
+        if [ -f /etc/systemd/system/ollama.service.d/colistream.conf ]; then
+          sudo sed -i '/CUDA_VISIBLE_DEVICES/d' /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+          sudo systemctl daemon-reload 2>/dev/null || true
+        fi
+      else
+        sudo systemctl set-environment CUDA_VISIBLE_DEVICES="$target_gpu" 2>/dev/null || true
+      fi
+      sudo systemctl restart ollama 2>/dev/null || true
+      echo -e "${C_GREEN}✔ Updated systemd service and restarted Ollama (GPU: ${target_gpu}).${C_RESET}"
     else
-      echo -e "${C_YELLOW}[!] Run: ${C_BOLD}sudo systemctl stop ollama${C_RESET} if it holds port 11434 on the slow GPU.${C_RESET}"
+      if [ "$target_gpu" = "all" ]; then
+        echo -e "${C_YELLOW}[!] To pool all GPUs in systemd, run: ${C_BOLD}sudo systemctl unset-environment CUDA_VISIBLE_DEVICES && sudo systemctl restart ollama${C_RESET}"
+      else
+        echo -e "${C_YELLOW}[!] Run: ${C_BOLD}sudo systemctl set-environment CUDA_VISIBLE_DEVICES=${target_gpu} && sudo systemctl restart ollama${C_RESET}"
+      fi
     fi
   fi
 
@@ -355,7 +374,7 @@ cmd_restart_engine() {
 
   apply_gpu_configuration "$target_gpu"
   ensure_backend
-  echo -e "${C_GREEN}✔ Local inference engine restarted and locked to GPU ${target_gpu}!${C_RESET}"
+  echo -e "${C_GREEN}✔ Local inference engine restarted and configured for GPU: ${target_gpu}!${C_RESET}"
 }
 
 cmd_turbo() {
@@ -1014,7 +1033,10 @@ def get_visible_vram_mb():
         if os.path.exists(cfg_file):
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
+        if active_gpu == "all":
+            env_cuda = "all"
+        else:
+            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
 
         import subprocess
         out = subprocess.check_output(
@@ -1876,6 +1898,23 @@ except:
   run_hardware_scan
   local model_lower
   model_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]')
+
+  # Multi-GPU Pooling Auto-Activation for Heavy Frontier Models (70B/72B/671B):
+  if [[ "$model_lower" =~ 70b|72b|671b ]] && [ "$GPU_COUNT" -gt 1 ]; then
+    local TOTAL_POOL_VRAM_MB=0
+    for m in "${GPU_MEMS[@]}"; do
+      TOTAL_POOL_VRAM_MB=$((TOTAL_POOL_VRAM_MB + m))
+    done
+    local TOTAL_POOL_VRAM_GB=$((TOTAL_POOL_VRAM_MB / 1024))
+
+    if [ "$TOTAL_POOL_VRAM_GB" -ge 40 ] && [ "$ACTIVE_GPU" != "all" ]; then
+      echo -e "\n${C_GREEN}${C_BOLD}[*] Multi-GPU Setup Detected ($GPU_COUNT cards, ${TOTAL_POOL_VRAM_GB} GB Total VRAM Pool)!${C_RESET}"
+      echo -e "${C_CYAN}    Unlocking Multi-Card Mode ('all') so 72B fits 100% in VRAM across all GPUs...${C_RESET}"
+      apply_gpu_configuration "all"
+      run_hardware_scan
+    fi
+  fi
+
   if [[ "$model_lower" =~ 70b|72b|671b ]] && [ "$AVAILABLE_VRAM_GB" -lt 44 ]; then
     echo -e "\n${C_YELLOW}┌── ⚠ HARDWARE INSUFFICIENCY WARNING: MODEL EXCEEDS VRAM ──────────┐${C_RESET}"
     echo -e "│ ${C_BOLD}Selected Model${C_RESET}  : ${C_CYAN}${model}${C_RESET} (Dense 72B requires ~48 GB VRAM for native speed)│"
@@ -1942,7 +1981,11 @@ except Exception:
   fi
   write_inline_chat_script "$chat_script"
 
-  echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  if [ "$ACTIVE_GPU" = "all" ]; then
+    echo -e "${C_CYAN}[*] Active GPU Target: [ALL GPUs Pooled (${GPU_COUNT:-2} cards)] (CUDA_VISIBLE_DEVICES=all / unset)${C_RESET}"
+  else
+    echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  fi
   if [ -e /dev/tty ]; then
     python3 "$chat_script" "$model" </dev/tty
   else
@@ -1991,7 +2034,11 @@ cmd_swarm() {
   write_inline_chat_script "$chat_script"
 
   local rounds="${3:-2}"
-  echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  if [ "$ACTIVE_GPU" = "all" ]; then
+    echo -e "${C_CYAN}[*] Active GPU Target: [ALL GPUs Pooled (${GPU_COUNT:-2} cards)] (CUDA_VISIBLE_DEVICES=all / unset)${C_RESET}"
+  else
+    echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  fi
   if [ -e /dev/tty ]; then
     python3 "$chat_script" --swarm "$ARCHITECT" "$WORKER" "$rounds" </dev/tty
   else
@@ -2015,7 +2062,11 @@ cmd_parallel() {
   fi
   write_inline_chat_script "$chat_script"
 
-  echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  if [ "$ACTIVE_GPU" = "all" ]; then
+    echo -e "${C_CYAN}[*] Active GPU Target: [ALL GPUs Pooled (${GPU_COUNT:-2} cards)] (CUDA_VISIBLE_DEVICES=all / unset)${C_RESET}"
+  else
+    echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  fi
   if [ -e /dev/tty ]; then
     python3 "$chat_script" --parallel "$m1" "$m2" </dev/tty
   else
@@ -2244,7 +2295,11 @@ EOF
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_YELLOW}Heavy 72B Model${C_RESET} (~22GB VRAM Clamped + CPU/RAM Split)           │"
+    if [ "$AVAILABLE_VRAM_GB" -ge 40 ]; then
+      echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_GREEN}Frontier 72B Model${C_RESET} (~42GB VRAM • 100% GPU Across All Cards)       │"
+    else
+      echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_YELLOW}Heavy 72B Model${C_RESET} (~22GB VRAM Clamped + CPU/RAM Split)           │"
+    fi
     echo -e "│      → Direct Command: ${C_CYAN}colistream run 72b${C_RESET}                               │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_CYAN}Custom Swarm Builder${C_RESET} (Pick ANY 2+ Models to Run Together)     │"

@@ -394,7 +394,10 @@ def get_visible_vram_mb():
         if os.path.exists(cfg_file):
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
+        if active_gpu == "all":
+            env_cuda = "all"
+        else:
+            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
 
         import subprocess
         out = subprocess.check_output(
