@@ -225,15 +225,19 @@ run_hardware_scan() {
   # Determine Active GPU (Auto-Isolate Fast Card on Multi-GPU rigs)
   GPU_CONFIG_FILE="${HOME}/.colistream/gpu_config"
   mkdir -p "${HOME}/.colistream" 2>/dev/null || true
+  ACTIVE_GPU=""
   if [ -f "$GPU_CONFIG_FILE" ]; then
     ACTIVE_GPU=$(cat "$GPU_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
-  else
-    if [ "$GPU_COUNT" -gt 1 ]; then
+  fi
+  if [ "$GPU_COUNT" -gt 1 ]; then
+    # On multi-GPU rigs, if config is missing or left over as single-card '0', auto-upgrade to 'all'
+    if [ -z "$ACTIVE_GPU" ] || [ "$ACTIVE_GPU" = "0" ]; then
       ACTIVE_GPU="all"
       echo "$ACTIVE_GPU" > "$GPU_CONFIG_FILE" 2>/dev/null || true
-    else
-      ACTIVE_GPU="0"
+      unset CUDA_VISIBLE_DEVICES
     fi
+  else
+    ACTIVE_GPU="${ACTIVE_GPU:-0}"
   fi
 
   AVAILABLE_VRAM_MB=0
@@ -562,7 +566,7 @@ cmd_pull() {
   fi
   case "$model" in
     32b|32B) model="qwen2.5-coder:32b-instruct-q3_K_M" ;;
-    72b|72B) model="qwen2.5:72b" ;;
+    72b|72B) model="qwen2.5:72b-instruct-q3_K_M" ;;
     14b|14B) model="qwen3:14b" ;;
     1.5b|1.5B) model="qwen2.5-coder:1.5b" ;;
     7b|7B) model="qwen2.5-coder:7b" ;;
@@ -1017,7 +1021,16 @@ def resolve_model_name(name):
             pass
         return "qwen2.5-coder:32b-instruct-q3_K_M"
     if nl in ("72b", "72", "qwen-72b", "qwen2.5-72b"):
-        return "qwen2.5:72b"
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1) as resp:
+                tags = [m.get("name","") for m in json.loads(resp.read().decode()).get("models",[])]
+                if any("72b" in t and ("q3" in t.lower() or "q3_k_m" in t.lower()) for t in tags):
+                    return "qwen2.5:72b-instruct-q3_K_M"
+                elif any("qwen2.5:72b" in t for t in tags):
+                    return "qwen2.5:72b"
+        except Exception:
+            pass
+        return "qwen2.5:72b-instruct-q3_K_M"
     if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
         return "qwen3:14b"
     if nl in ("1.5b", "1.5", "qwen-1.5b"):
@@ -1026,6 +1039,18 @@ def resolve_model_name(name):
         return "qwen2.5-coder:7b"
     return n
 
+def get_gpu_count():
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        lines = [l for l in out.splitlines() if l.strip()]
+        return max(1, len(lines))
+    except Exception:
+        return 1
+
 def get_visible_vram_mb():
     try:
         cfg_file = os.path.expanduser("~/.colistream/gpu_config")
@@ -1033,10 +1058,16 @@ def get_visible_vram_mb():
         if os.path.exists(cfg_file):
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        if active_gpu == "all":
-            env_cuda = "all"
+        
+        gpu_cnt = get_gpu_count()
+        # On multi-GPU rigs, pool all GPUs by default unless user explicitly pinned a single card != 0
+        if gpu_cnt > 1:
+            if active_gpu == "all" or not active_gpu or active_gpu == "0":
+                env_cuda = "all"
+            else:
+                env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
         else:
-            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
+            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
 
         import subprocess
         out = subprocess.check_output(
@@ -1053,9 +1084,9 @@ def get_visible_vram_mb():
                     total_vram += mem
                 elif str(idx) in env_cuda.split(","):
                     total_vram += mem
-        return total_vram
+        return total_vram if total_vram > 0 else (gpu_cnt * 24576)
     except Exception:
-        return 24576
+        return 49152
 
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
@@ -1137,9 +1168,10 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
+    gpu_cnt = get_gpu_count()
     if is_70b:
-        if vram_mb >= 44000:
-            # Multi-GPU Mode (>=48GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 20-25+ tok/s!
+        if gpu_cnt > 1 or vram_mb >= 36000:
+            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 15-20+ tok/s!
             num_gpu_layers = 99
             num_ctx_val = 2048
             num_batch_val = 512
@@ -1245,10 +1277,9 @@ def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api
     cpu_threads = max(1, os.cpu_count() or 4)
     opt_threads = min(cpu_threads, 10)
     vram_mb = get_visible_vram_mb()
-    m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
-    num_ctx_val = 1536 if (is_70b and vram_mb < 44000) else 2048
+    gpu_cnt = get_gpu_count()
+    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
+    num_ctx_val = 2048 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 1536
 
     payload = {
         "model": model_name,
@@ -1362,9 +1393,8 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     api_url = "http://localhost:11434/api/chat"
     opt_threads = min(os.cpu_count() or 8, 10)
     vram_mb = get_visible_vram_mb()
-    m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
+    gpu_cnt = get_gpu_count()
+    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
 
     payload = {
         "model": model_name,
@@ -2122,8 +2152,29 @@ cmd_run() {
     32b|32B)
       model="qwen2.5-coder:32b-instruct-q3_K_M"
       ;;
-    72b|72B)
-      model="qwen2.5:72b"
+    72b|72B|qwen2.5:72b|qwen-72b)
+      local has_q3_72b
+      has_q3_72b=$(python3 -c "
+import urllib.request, json
+try:
+    with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2) as resp:
+        tags = [m.get('name','') for m in json.loads(resp.read().decode()).get('models',[])]
+        if any('72b' in t and ('q3' in t.lower() or 'q3_k_m' in t.lower()) for t in tags):
+            print('1')
+        elif any('qwen2.5:72b' in t for t in tags):
+            print('2')
+        else:
+            print('0')
+except:
+    print('0')
+" 2>/dev/null || echo "0")
+      if [ "$has_q3_72b" = "1" ]; then
+        model="qwen2.5:72b-instruct-q3_K_M"
+      elif [ "$has_q3_72b" = "2" ]; then
+        model="qwen2.5:72b"
+      else
+        model="qwen2.5:72b-instruct-q3_K_M"
+      fi
       ;;
     14b|14B)
       model="qwen3:14b"
@@ -2162,7 +2213,7 @@ except:
     done
     local TOTAL_POOL_VRAM_GB=$((TOTAL_POOL_VRAM_MB / 1024))
 
-    if [ "$TOTAL_POOL_VRAM_GB" -ge 40 ] && [ "$ACTIVE_GPU" != "all" ]; then
+    if [ "$TOTAL_POOL_VRAM_GB" -ge 36 ] && [ "$ACTIVE_GPU" != "all" ]; then
       echo -e "\n${C_GREEN}${C_BOLD}[*] Multi-GPU Setup Detected ($GPU_COUNT cards, ${TOTAL_POOL_VRAM_GB} GB Total VRAM Pool)!${C_RESET}"
       echo -e "${C_CYAN}    Unlocking Multi-Card Mode ('all') so 72B fits 100% in VRAM across all GPUs...${C_RESET}"
       apply_gpu_configuration "all"
@@ -2170,10 +2221,15 @@ except:
     fi
   fi
 
-  if [[ "$model_lower" =~ 70b|72b|671b ]] && [ "$AVAILABLE_VRAM_GB" -lt 44 ]; then
+  local req_vram=44
+  if [[ "$model_lower" =~ q3|q3_k_m|32b ]]; then
+    req_vram=36
+  fi
+
+  if [[ "$model_lower" =~ 70b|72b|671b ]] && [ "$AVAILABLE_VRAM_GB" -lt "$req_vram" ]; then
     echo -e "\n${C_YELLOW}┌── ⚠ HARDWARE INSUFFICIENCY WARNING: MODEL EXCEEDS VRAM ──────────┐${C_RESET}"
-    echo -e "│ ${C_BOLD}Selected Model${C_RESET}  : ${C_CYAN}${model}${C_RESET} (Dense 72B requires ~48 GB VRAM for native speed)│"
-    echo -e "│ ${C_BOLD}Available VRAM${C_RESET}  : ${C_YELLOW}${AVAILABLE_VRAM_GB} GB${C_RESET} [GPU ${ACTIVE_GPU:-0}] (Short by ~$((48 - AVAILABLE_VRAM_GB)) GB)                │"
+    echo -e "│ ${C_BOLD}Selected Model${C_RESET}  : ${C_CYAN}${model}${C_RESET} (Dense 72B requires ~${req_vram} GB VRAM for native speed)│"
+    echo -e "│ ${C_BOLD}Available VRAM${C_RESET}  : ${C_YELLOW}${AVAILABLE_VRAM_GB} GB${C_RESET} (Short by ~$((req_vram - AVAILABLE_VRAM_GB)) GB)                │"
     echo -e "│ ${C_BOLD}Offload Reality${C_RESET} : ~42 layers will be forced to Host CPU & DDR4 RAM!      │"
     echo -e "│ ${C_BOLD}Expected Speed${C_RESET}  : ${C_RED}~0.05 - 0.2 tok/s (EXTREMELY SLOW: ~15s per token)${C_RESET} │"
     echo -e "│                                                                  │"

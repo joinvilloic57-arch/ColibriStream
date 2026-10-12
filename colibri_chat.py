@@ -378,7 +378,16 @@ def resolve_model_name(name):
             pass
         return "qwen2.5-coder:32b-instruct-q3_K_M"
     if nl in ("72b", "72", "qwen-72b", "qwen2.5-72b"):
-        return "qwen2.5:72b"
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1) as resp:
+                tags = [m.get("name","") for m in json.loads(resp.read().decode()).get("models",[])]
+                if any("72b" in t and ("q3" in t.lower() or "q3_k_m" in t.lower()) for t in tags):
+                    return "qwen2.5:72b-instruct-q3_K_M"
+                elif any("qwen2.5:72b" in t for t in tags):
+                    return "qwen2.5:72b"
+        except Exception:
+            pass
+        return "qwen2.5:72b-instruct-q3_K_M"
     if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
         return "qwen3:14b"
     if nl in ("1.5b", "1.5", "qwen-1.5b"):
@@ -387,6 +396,18 @@ def resolve_model_name(name):
         return "qwen2.5-coder:7b"
     return n
 
+def get_gpu_count():
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        lines = [l for l in out.splitlines() if l.strip()]
+        return max(1, len(lines))
+    except Exception:
+        return 1
+
 def get_visible_vram_mb():
     try:
         cfg_file = os.path.expanduser("~/.colistream/gpu_config")
@@ -394,10 +415,16 @@ def get_visible_vram_mb():
         if os.path.exists(cfg_file):
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        if active_gpu == "all":
-            env_cuda = "all"
+        
+        gpu_cnt = get_gpu_count()
+        # On multi-GPU rigs, pool all GPUs by default unless user explicitly pinned a single card != 0
+        if gpu_cnt > 1:
+            if active_gpu == "all" or not active_gpu or active_gpu == "0":
+                env_cuda = "all"
+            else:
+                env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
         else:
-            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
+            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
 
         import subprocess
         out = subprocess.check_output(
@@ -414,9 +441,9 @@ def get_visible_vram_mb():
                     total_vram += mem
                 elif str(idx) in env_cuda.split(","):
                     total_vram += mem
-        return total_vram
+        return total_vram if total_vram > 0 else (gpu_cnt * 24576)
     except Exception:
-        return 24576
+        return 49152
 
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
@@ -498,9 +525,10 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
+    gpu_cnt = get_gpu_count()
     if is_70b:
-        if vram_mb >= 44000:
-            # Multi-GPU Mode (>=48GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 20-25+ tok/s!
+        if gpu_cnt > 1 or vram_mb >= 36000:
+            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 15-20+ tok/s!
             num_gpu_layers = 99
             num_ctx_val = 2048
             num_batch_val = 512
@@ -607,9 +635,9 @@ def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api
     opt_threads = min(cpu_threads, 10)
     vram_mb = get_visible_vram_mb()
     m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
-    num_ctx_val = 1536 if (is_70b and vram_mb < 44000) else 2048
+    gpu_cnt = get_gpu_count()
+    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
+    num_ctx_val = 2048 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 1536
 
     payload = {
         "model": model_name,
@@ -723,9 +751,8 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     api_url = "http://localhost:11434/api/chat"
     opt_threads = min(os.cpu_count() or 8, 10)
     vram_mb = get_visible_vram_mb()
-    m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
+    gpu_cnt = get_gpu_count()
+    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
 
     payload = {
         "model": model_name,
