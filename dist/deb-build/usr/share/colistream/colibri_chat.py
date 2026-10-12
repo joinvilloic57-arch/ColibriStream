@@ -129,14 +129,18 @@ def print_coding_agent_help():
     print(f"│ {C_YELLOW}/diff{C_RESET}            : Show git diff of recent changes                       │")
     print(f"│ {C_YELLOW}/undo{C_RESET}            : Revert last file modification or creation             │")
     print(f"│ {C_YELLOW}!cmd / /run cmd{C_RESET}  : Run shell command directly (e.g. !pytest, !ls)        │")
+    print(f"│ {C_YELLOW}/debate [model]{C_RESET}  : Launch 2-AI multi-turn debate on current task         │")
     print(f"│ {C_YELLOW}/clear{C_RESET}           : Reset conversation history                            │")
     print(f"│ {C_YELLOW}/menu{C_RESET}            : Return to Model Menu                                  │")
     print(f"│ {C_YELLOW}/exit{C_RESET}            : Exit session                                          │")
     print(f"├──────────────────────────────────────────────────────────────────┤")
     print(f"│ {C_BOLD}Autonomous File Creation & Modification (Aider Style):{C_RESET}           │")
-    print(f"│  • Create whole files : ```write:filepath\n...```               │")
-    print(f"│  • Edit surgical lines: ```edit:filepath\n<<<<<<< SEARCH...```  │")
+    print(f"│  • Create whole files : ```write:filepath\\n...```               │")
+    print(f"│  • Edit surgical lines: ```edit:filepath\\n<<<<<<< SEARCH...```  │")
     print(f"│  • All files are created & edited directly on physical disk!     │")
+    print(f"├──────────────────────────────────────────────────────────────────┤")
+    print(f"│ {C_BOLD}2-AI Multi-Turn Debate & Review Loop:{C_RESET}                              │")
+    print(f"│  • Sibling models dialogue back & forth to audit, refine & debug │")
     print(f"{C_BOLD}└──────────────────────────────────────────────────────────────────┘{C_RESET}\n")
 
 def build_system_prompt():
@@ -498,6 +502,183 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     
     return "".join(full_response), 0, 0
 
+def run_swarm_debate_session(model1_name, model2_name, rounds=2):
+    model1 = resolve_model_name(model1_name)
+    model2 = resolve_model_name(model2_name)
+    ensure_model_installed(model1)
+    ensure_model_installed(model2)
+
+    os.system("clear 2>/dev/null || true")
+    print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║           COLIBRISTREAM 2-AI MULTI-TURN DEBATE & REVIEW LOOP                   ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║      Autonomous Sibling Dialogue • Adversarial Code Audit & Verification       ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print(f"│  {C_CYAN}🧠 Lead Architect :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[Proposal & Synthesis]{C_RESET} │")
+    print(f"│  {C_PURPLE}🔍 Peer Reviewer  :{C_RESET} {C_WHITE}{C_BOLD}{model2:<35}{C_RESET} {C_GRAY}[Adversarial Audit]{C_RESET}    │")
+    print(f"│  {C_YELLOW}🔄 Review Depth   :{C_RESET} {C_WHITE}{rounds} Rounds (Back-and-Forth Multi-Turn Loop){C_RESET}                   │")
+    print(f"├────────────────────────────────────────────────────────────────────────────────┤")
+    print(f"│  {C_BOLD}Commands:{C_RESET} {C_YELLOW}/rounds <N>{C_RESET} | {C_YELLOW}/apply{C_RESET} (Save code to disk) | {C_YELLOW}/add <file>{C_RESET} | {C_YELLOW}!cmd{C_RESET} | {C_YELLOW}/exit{C_RESET}   │")
+    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
+    last_refined_solution = ""
+
+    while True:
+        try:
+            prompt = input(f"\n{C_BOLD}{C_GREEN}Debate Task ❯ {C_RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{C_DIM}Debate session ended.{C_RESET}")
+            break
+
+        if not prompt:
+            continue
+
+        if prompt in ("/exit", "/quit", "exit", "quit"):
+            print(f"{C_DIM}Debate session ended.{C_RESET}")
+            break
+
+        if prompt == "/menu":
+            print(f"{C_CYAN}Returning to Menu...{C_RESET}")
+            sys.exit(42)
+
+        if prompt.startswith("/rounds ") or prompt.startswith("/r "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                rounds = max(1, min(5, int(parts[1].strip())))
+                print(f"{C_GREEN}✔ Debate depth set to {rounds} rounds.{C_RESET}")
+            continue
+
+        if prompt in ("/apply", "/save"):
+            if last_refined_solution:
+                print(f"\n{C_CYAN}[*] Applying consensus code edits to workspace...{C_RESET}")
+                applied = apply_model_edits(last_refined_solution)
+                if not applied:
+                    print(f"{C_YELLOW}[!] No file modification blocks found in last solution.{C_RESET}")
+            else:
+                print(f"{C_YELLOW}[!] No generated solution to apply yet.{C_RESET}")
+            continue
+
+        if prompt.startswith("/add ") or prompt.startswith("/a "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                add_file_to_context(parts[1].strip())
+            continue
+
+        if prompt.startswith("/drop ") or prompt.startswith("/rm "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                drop_file_from_context(parts[1].strip())
+            continue
+
+        if prompt in ("/files", "/ls"):
+            list_context_files()
+            continue
+
+        if prompt in ("/diff",):
+            show_git_diff()
+            continue
+
+        if prompt in ("/undo",):
+            undo_last_change()
+            continue
+
+        if prompt.startswith("/run ") or prompt.startswith("!"):
+            cmd_to_run = prompt[5:].strip() if prompt.startswith("/run ") else prompt[1:].strip()
+            execute_shell_command(cmd_to_run, [])
+            continue
+
+        # Execute Multi-Turn Debate Loop
+        files_ctx = build_system_prompt()
+        current_proposal = ""
+        current_critique = ""
+
+        print(f"\n{C_BOLD}{C_YELLOW}⚡ Initiating {rounds}-Round Autonomous Debate between {model1} and {model2}...{C_RESET}")
+
+        for r in range(1, rounds + 1):
+            # ─── TURN 1: Lead Architect (Model 1) ───
+            arch_title = "Initial Technical Proposal" if r == 1 else f"Defended & Refined Synthesis (V{r})"
+            print(f"\n{C_BOLD}{C_CYAN}┌── [Round {r}/{rounds}] 🧠 Lead Architect ({model1}): {arch_title} ──┐{C_RESET}")
+
+            if r == 1:
+                arch_prompt = (
+                    f"You are the Lead Architect in an autonomous 2-AI swarm.\n"
+                    f"Your partner is an Adversarial Peer Reviewer who will rigorously stress-test your proposal.\n"
+                    f"User Task: {prompt}\n\n"
+                    f"{files_ctx}\n\n"
+                    f"Instructions:\n"
+                    f"1. Formulate a comprehensive, production-grade technical solution or architecture.\n"
+                    f"2. Explain your algorithmic decisions and trade-offs clearly.\n"
+                    f"3. Provide complete, working code blocks with filename tags (e.g. ```filename.ext) where applicable.\n"
+                )
+            else:
+                arch_prompt = (
+                    f"You are the Lead Architect in an autonomous 2-AI swarm.\n"
+                    f"The Peer Reviewer has conducted a rigorous critique of your previous proposal.\n"
+                    f"Original Task: {prompt}\n\n"
+                    f"--- REVIEWER CRITIQUE ---\n{current_critique}\n-------------------------\n\n"
+                    f"Instructions:\n"
+                    f"1. Directly address every flaw, bug, edge case, and critique raised by the Reviewer.\n"
+                    f"2. Defend choices that are technically justified with clear reasoning.\n"
+                    f"3. Output a hardened, battle-tested Version {r} with corrected, complete code.\n"
+                )
+
+            arch_messages = [
+                {"role": "system", "content": "You are the Lead Architect in an autonomous 2-AI engineering pair."},
+                {"role": "user", "content": arch_prompt}
+            ]
+
+            print(f"{C_CYAN}{model1} ❯ {C_RESET}", end="", flush=True)
+            arch_output, arch_spd, arch_toks = stream_chat(model1, arch_messages)
+            current_proposal = arch_output
+            last_refined_solution = arch_output
+
+            spd_text = f"{arch_spd:.1f} tok/s" if arch_spd > 0 else ""
+            print(f"\n{C_DIM}└─ [{arch_toks} tokens {spd_text}]{C_RESET}")
+
+            # ─── TURN 2: Peer Reviewer (Model 2) ───
+            is_final_round = (r == rounds)
+            rev_title = "Critical Analysis & Edge Cases" if not is_final_round else "Final Verification & Consensus Verdict"
+            print(f"\n{C_BOLD}{C_PURPLE}┌── [Round {r}/{rounds}] 🔍 Peer Reviewer ({model2}): {rev_title} ──┐{C_RESET}")
+
+            if not is_final_round:
+                rev_prompt = (
+                    f"You are an expert Peer Reviewer and Adversarial Critic in an autonomous 2-AI swarm.\n"
+                    f"Your objective is to stress-test the Lead Architect's proposal and find hidden flaws.\n"
+                    f"Original Task: {prompt}\n\n"
+                    f"Architect Proposal:\n{current_proposal}\n\n"
+                    f"Instructions:\n"
+                    f"1. Identify logical flaws, race conditions, memory leaks, performance bottlenecks, or security holes.\n"
+                    f"2. Challenge boundary conditions, unhandled exceptions, and missing edge cases.\n"
+                    f"3. Give specific, actionable directives for the Architect to implement in the next round.\n"
+                )
+            else:
+                rev_prompt = (
+                    f"You are the Peer Reviewer conducting the FINAL AUDIT and CONSENSUS VERDICT in an autonomous 2-AI swarm.\n"
+                    f"Original Task: {prompt}\n\n"
+                    f"Architect Refined Solution (Version {r}):\n{current_proposal}\n\n"
+                    f"Instructions:\n"
+                    f"1. Verify whether previous bugs, edge cases, and critiques were successfully resolved.\n"
+                    f"2. Give a clear verdict at the start of your reply:\n"
+                    f"   VERDICT: [APPROVED ✔] (if production-ready) or [NEEDS REVISION ⚠] (if issues remain).\n"
+                    f"3. Summarize final strengths and production advice.\n"
+                )
+
+            rev_messages = [
+                {"role": "system", "content": "You are the Adversarial Peer Reviewer in an autonomous 2-AI engineering pair."},
+                {"role": "user", "content": rev_prompt}
+            ]
+
+            print(f"{C_PURPLE}{model2} ❯ {C_RESET}", end="", flush=True)
+            rev_output, rev_spd, rev_toks = stream_chat(model2, rev_messages)
+            current_critique = rev_output
+
+            spd_text = f"{rev_spd:.1f} tok/s" if rev_spd > 0 else ""
+            print(f"\n{C_DIM}└─ [{rev_toks} tokens {spd_text}]{C_RESET}")
+
+        print(f"\n{C_GREEN}{C_BOLD}════════════════════════════════════════════════════════════════════════════════{C_RESET}")
+        print(f"{C_GREEN}{C_BOLD}✔ 2-AI Multi-Turn Consensus Loop Complete ({rounds} Rounds Finished){C_RESET}")
+        print(f"{C_GREEN}{C_BOLD}════════════════════════════════════════════════════════════════════════════════{C_RESET}")
+        print(f"{C_DIM}Actions: Type '/apply' to save audited code to disk | Enter new prompt | Type '/exit'{C_RESET}")
+
 def run_chat_session(model_name):
     model_name = resolve_model_name(model_name)
     ensure_model_installed(model_name)
@@ -522,8 +703,8 @@ def run_chat_session(model_name):
     else:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
     print(f"├────────────────────────────────────────────────────────────────────────┤")
-    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/add <file>{C_RESET} (Add context) | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/undo{C_RESET} | {C_YELLOW}!cmd{C_RESET} (Run shell)  │")
-    print(f"│               {C_YELLOW}/files{C_RESET} (List context)   | {C_YELLOW}/help{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/menu{C_RESET} | {C_YELLOW}/exit{C_RESET}    │")
+    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/add <file>{C_RESET} | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/undo{C_RESET} | {C_YELLOW}!cmd{C_RESET} (Shell) | {C_YELLOW}/debate [model]{C_RESET} │")
+    print(f"│               {C_YELLOW}/files{C_RESET}      | {C_YELLOW}/help{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/menu{C_RESET}        | {C_YELLOW}/exit{C_RESET}          │")
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     if is_70b and vram_mb < 44000:
@@ -567,6 +748,13 @@ def run_chat_session(model_name):
 
         if prompt in ("/help", "/h", "?"):
             print_coding_agent_help()
+            continue
+
+        if prompt.startswith("/debate") or prompt.startswith("/swarm"):
+            parts = prompt.split()
+            second_model = parts[1] if len(parts) > 1 else ("qwen2.5-coder:1.5b" if model_name != "qwen2.5-coder:1.5b" else "qwen3:14b")
+            rounds_num = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 2
+            run_swarm_debate_session(model_name, second_model, rounds=rounds_num)
             continue
 
         if prompt.startswith("/add ") or prompt.startswith("/a "):
@@ -626,5 +814,11 @@ def run_chat_session(model_name):
         print(f"\n{C_DIM}└─ [{tokens} tokens {speed_str}]{C_RESET}")
 
 if __name__ == "__main__":
-    model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
-    run_chat_session(model)
+    if len(sys.argv) > 1 and sys.argv[1] in ("--swarm", "--debate", "swarm", "debate"):
+        m1 = sys.argv[2] if len(sys.argv) > 2 else "qwen3:14b"
+        m2 = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-coder:1.5b"
+        rounds_arg = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else 2
+        run_swarm_debate_session(m1, m2, rounds=rounds_arg)
+    else:
+        model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
+        run_chat_session(model)
