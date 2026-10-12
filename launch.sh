@@ -1027,7 +1027,7 @@ def ensure_model_installed(model_name):
         return False
     return True
 
-def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat"):
+def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat", color=C_CYAN):
     model_name = resolve_model_name(model_name)
     cpu_threads = max(1, os.cpu_count() or 4)
     # On multi-socket NUMA systems, clamping to single-socket (8-10 cores) maximizes cache hits and throughput
@@ -1081,6 +1081,21 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
     
+    import threading
+    stop_spinner = threading.Event()
+    def spinner_task():
+        spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        idx = 0
+        while not stop_spinner.is_set():
+            frame = spinner_frames[idx % len(spinner_frames)]
+            sys.stdout.write(f"\r\033[K{C_YELLOW}{frame} {model_name} is thinking & computing... [Please wait, model is generating]{C_RESET}")
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.08)
+
+    spinner_thread = threading.Thread(target=spinner_task, daemon=True)
+    spinner_thread.start()
+
     full_response = []
     token_count = 0
     first_token = True
@@ -1096,8 +1111,8 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
                     content = msg.get("content", "")
                     if content:
                         if first_token:
-                            # Erase loading status indicator cleanly
-                            sys.stdout.write("\r\033[K" + f"{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}")
+                            stop_spinner.set()
+                            sys.stdout.write(f"\r\033[K{C_BOLD}{color}{model_name} ❯ {C_RESET}")
                             sys.stdout.flush()
                             first_token = False
                         sys.stdout.write(content)
@@ -1121,6 +1136,8 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
         return "".join(full_response), 0, 0
+    finally:
+        stop_spinner.set()
     
     return "".join(full_response), 0, 0
 
@@ -1248,8 +1265,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                 {"role": "user", "content": arch_prompt}
             ]
 
-            print(f"{C_CYAN}{model1} ❯ {C_RESET}", end="", flush=True)
-            arch_output, arch_spd, arch_toks = stream_chat(model1, arch_messages)
+            arch_output, arch_spd, arch_toks = stream_chat(model1, arch_messages, color=C_CYAN)
             current_proposal = arch_output
             last_refined_solution = arch_output
 
@@ -1289,8 +1305,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                 {"role": "user", "content": rev_prompt}
             ]
 
-            print(f"{C_PURPLE}{model2} ❯ {C_RESET}", end="", flush=True)
-            rev_output, rev_spd, rev_toks = stream_chat(model2, rev_messages)
+            rev_output, rev_spd, rev_toks = stream_chat(model2, rev_messages, color=C_PURPLE)
             current_critique = rev_output
 
             spd_text = f"{rev_spd:.1f} tok/s" if rev_spd > 0 else ""
@@ -1419,8 +1434,8 @@ def run_chat_session(model_name):
         else:
             status_hint = f"{C_DIM}[Processing on GPU...]{C_RESET}"
 
-        print(f"\n{C_BOLD}{C_CYAN}{model_name} ❯ {C_RESET}{status_hint}", end="", flush=True)
-        response_text, speed, tokens = stream_chat(model_name, history)
+        print("")
+        response_text, speed, tokens = stream_chat(model_name, history, color=C_CYAN)
         if response_text:
             history.append({"role": "assistant", "content": response_text})
             # Autonomous Aider-style File Modification Engine
