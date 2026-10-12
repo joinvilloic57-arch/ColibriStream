@@ -446,6 +446,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
         "model": model_name,
         "messages": messages,
         "stream": True,
+        "keep_alive": "30m",
         "options": {
             "temperature": 0.7,
             "num_gpu": num_gpu_layers,

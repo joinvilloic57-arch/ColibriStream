@@ -54,8 +54,9 @@ ensure_backend() {
   # Universal GPU Architecture Flags: Ensure older GPUs (sm_60/sm_61 Pascal, sm_70 Volta)
   # and newer GPUs (sm_80 Ampere, sm_89 Ada, sm_90 Hopper) run 100% on GPU without CPU fallback
   export OLLAMA_FLASH_ATTENTION=0     # Older architectures (P40, V100) don't have FlashAttention-2; disabling forces native CUDA kernels on GPU
-  export OLLAMA_NUM_PARALLEL=1        # Maximize VRAM allocated strictly to the primary active model
-  export OLLAMA_KEEP_ALIVE=5m         # Keep warm in GPU memory
+  export OLLAMA_NUM_PARALLEL=2        # Allow concurrent model inference for swarms
+  export OLLAMA_MAX_LOADED_MODELS=3   # Keep both Architect & Worker warm in memory (Zero disk reload penalty)
+  export OLLAMA_KEEP_ALIVE=30m        # Keep models warm in memory for 30 minutes
   export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on older motherboards
   export OLLAMA_MAX_PARALLEL_DOWNLOADS=16 # 16 parallel multi-threaded chunks for saturating gigabit downloads
 
@@ -79,9 +80,11 @@ ensure_backend() {
     cat << SYSCONF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
 [Service]
 ${env_cuda}
+Environment="OLLAMA_MAX_LOADED_MODELS=3"
 Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
 Environment="OLLAMA_FLASH_ATTENTION=0"
-Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_KEEP_ALIVE=30m"
 Environment="GGML_CUDA_NO_PINNED=1"
 SYSCONF
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -276,9 +279,11 @@ apply_gpu_configuration() {
     cat << EOF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
 [Service]
 ${env_cuda}
+Environment="OLLAMA_MAX_LOADED_MODELS=3"
 Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
 Environment="OLLAMA_FLASH_ATTENTION=0"
-Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_KEEP_ALIVE=30m"
 Environment="GGML_CUDA_NO_PINNED=1"
 EOF
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -983,6 +988,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
         "model": model_name,
         "messages": messages,
         "stream": True,
+        "keep_alive": "30m",
         "options": {
             "temperature": 0.7,
             "num_gpu": num_gpu_layers,
