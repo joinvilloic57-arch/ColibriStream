@@ -793,104 +793,181 @@ def build_system_prompt():
             sys_prompt.append(f"\n--- FILE: {path} ---\n```{path}\n{content}\n```")
     return "\n".join(sys_prompt)
 
-def apply_model_edits(response_text):
-    created_or_modified = []
-    
-    # 1. Whole file writes: ```write:filepath or ```create:filepath
-    write_pattern = re.compile(r"```(?:write|create):([^\s\r\n]+)\s*\r?\n(.*?)```", re.DOTALL)
-    for match in write_pattern.finditer(response_text):
-        target_path = match.group(1).strip()
-        code = match.group(2)
-        if not target_path:
-            continue
-        try:
-            prev_content = None
-            if os.path.exists(target_path):
-                with open(target_path, "r", encoding="utf-8", errors="replace") as f:
-                    prev_content = f.read()
-            file_backups.append((target_path, prev_content))
-            os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
-            with open(target_path, "w", encoding="utf-8") as f:
-                f.write(code)
-            tracked_files[target_path] = code
-            lines = len(code.splitlines())
-            action = "Overwrote" if prev_content is not None else "Created"
-            print(f"\n{C_GREEN}{C_BOLD}[✔ {action} File]{C_RESET} {C_CYAN}{target_path}{C_RESET} ({lines} lines on disk)")
-            created_or_modified.append(target_path)
-        except Exception as e:
-            print(f"\n{C_RED}[!] Error writing '{target_path}': {e}{C_RESET}")
-
-    # 2. Surgical search/replace edits (Aider style): ```edit:filepath
-    edit_block_pattern = re.compile(r"```edit:([^\s\r\n]+)\s*\r?\n(.*?)```", re.DOTALL)
-    for match in edit_block_pattern.finditer(response_text):
-        target_path = match.group(1).strip()
-        edit_body = match.group(2)
-        if not os.path.exists(target_path):
-            print(f"\n{C_YELLOW}[!] Cannot edit '{target_path}': File does not exist.{C_RESET}")
-            continue
-        try:
+def save_code_to_disk(target_path, code):
+    target_path = target_path.strip().strip("'\"`")
+    if not target_path:
+        return False
+    try:
+        prev_content = None
+        if os.path.exists(target_path):
             with open(target_path, "r", encoding="utf-8", errors="replace") as f:
-                original_text = f.read()
-            chunk_pattern = re.compile(r"<<<<<<< SEARCH\s*\r?\n(.*?)\r?\n=======\s*\r?\n(.*?)\r?\n>>>>>>>", re.DOTALL)
-            modified_text = original_text
-            chunks_applied = 0
-            for chunk in chunk_pattern.finditer(edit_body):
-                search_block = chunk.group(1)
-                replace_block = chunk.group(2)
-                if search_block in modified_text:
-                    modified_text = modified_text.replace(search_block, replace_block, 1)
-                    chunks_applied += 1
-                else:
-                    s_norm = "\n".join(line.strip() for line in search_block.splitlines() if line.strip())
-                    lines = modified_text.splitlines()
-                    found = False
-                    for i in range(len(lines)):
-                        for j in range(i+1, min(i+len(search_block.splitlines())+5, len(lines)+1)):
-                            candidate = "\n".join(l.strip() for l in lines[i:j] if l.strip())
-                            if candidate == s_norm:
-                                modified_text = "\n".join(lines[:i] + replace_block.splitlines() + lines[j:])
-                                chunks_applied += 1
-                                found = True
-                                break
-                        if found:
+                prev_content = f.read()
+        file_backups.append((target_path, prev_content))
+        parent_dir = os.path.dirname(os.path.abspath(target_path))
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(code)
+        tracked_files[target_path] = code
+        lines = len(code.splitlines())
+        action = "Overwrote" if prev_content is not None else "Created"
+        print(f"\n{C_GREEN}{C_BOLD}[✔ {action} File]{C_RESET} {C_CYAN}{target_path}{C_RESET} ({lines} lines on disk)")
+        return True
+    except Exception as e:
+        print(f"\n{C_RED}[!] Error writing '{target_path}': {e}{C_RESET}")
+        return False
+
+def apply_surgical_edit(target_path, edit_body):
+    target_path = target_path.strip().strip("'\"`")
+    if not os.path.exists(target_path):
+        print(f"\n{C_YELLOW}[!] Cannot edit '{target_path}': File does not exist.{C_RESET}")
+        return False
+    try:
+        with open(target_path, "r", encoding="utf-8", errors="replace") as f:
+            original_text = f.read()
+        chunk_pattern = re.compile(r"<<<<<<< SEARCH\s*\r?\n(.*?)\r?\n=======\s*\r?\n(.*?)\r?\n>>>>>>>", re.DOTALL)
+        modified_text = original_text
+        chunks_applied = 0
+        for chunk in chunk_pattern.finditer(edit_body):
+            search_block = chunk.group(1)
+            replace_block = chunk.group(2)
+            if search_block in modified_text:
+                modified_text = modified_text.replace(search_block, replace_block, 1)
+                chunks_applied += 1
+            else:
+                s_norm = "\n".join(line.strip() for line in search_block.splitlines() if line.strip())
+                lines = modified_text.splitlines()
+                found = False
+                for i in range(len(lines)):
+                    for j in range(i+1, min(i+len(search_block.splitlines())+5, len(lines)+1)):
+                        candidate = "\n".join(l.strip() for l in lines[i:j] if l.strip())
+                        if candidate == s_norm:
+                            modified_text = "\n".join(lines[:i] + replace_block.splitlines() + lines[j:])
+                            chunks_applied += 1
+                            found = True
                             break
-                    if not found:
-                        print(f"{C_YELLOW}[!] Search chunk not found in '{target_path}'. Skipping chunk.{C_RESET}")
+                    if found:
+                        break
+                if not found:
+                    print(f"{C_YELLOW}[!] Search chunk not found in '{target_path}'. Skipping chunk.{C_RESET}")
 
-            if chunks_applied > 0:
-                file_backups.append((target_path, original_text))
-                with open(target_path, "w", encoding="utf-8") as f:
-                    f.write(modified_text)
-                tracked_files[target_path] = modified_text
-                print(f"\n{C_GREEN}{C_BOLD}[✔ Applied {chunks_applied} Surgical Edit(s)]{C_RESET} {C_CYAN}{target_path}{C_RESET}")
-                created_or_modified.append(target_path)
-        except Exception as e:
-            print(f"\n{C_RED}[!] Error editing '{target_path}': {e}{C_RESET}")
+        if chunks_applied > 0:
+            file_backups.append((target_path, original_text))
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(modified_text)
+            tracked_files[target_path] = modified_text
+            print(f"\n{C_GREEN}{C_BOLD}[✔ Applied {chunks_applied} Surgical Edit(s)]{C_RESET} {C_CYAN}{target_path}{C_RESET}")
+            return True
+    except Exception as e:
+        print(f"\n{C_RED}[!] Error editing '{target_path}': {e}{C_RESET}")
+    return False
 
-    # 3. Generic code block filename header: ```path/to/file.ext
-    if not created_or_modified:
-        generic_pattern = re.compile(r"```([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\s*\r?\n(.*?)```", re.DOTALL)
-        for match in generic_pattern.finditer(response_text):
-            target_path = match.group(1).strip()
-            code = match.group(2)
-            ext = os.path.splitext(target_path)[1].lower()
-            if ext in [".py", ".sh", ".bash", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".rs", ".c", ".cpp", ".go", ".md"]:
-                try:
-                    prev_content = None
-                    if os.path.exists(target_path):
-                        with open(target_path, "r", encoding="utf-8", errors="replace") as f:
-                            prev_content = f.read()
-                    file_backups.append((target_path, prev_content))
-                    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
-                    with open(target_path, "w", encoding="utf-8") as f:
-                        f.write(code)
-                    tracked_files[target_path] = code
-                    lines = len(code.splitlines())
-                    action = "Overwrote" if prev_content is not None else "Created"
-                    print(f"\n{C_GREEN}{C_BOLD}[✔ {action} File]{C_RESET} {C_CYAN}{target_path}{C_RESET} ({lines} lines on disk)")
-                    created_or_modified.append(target_path)
-                except Exception as e:
-                    print(f"\n{C_RED}[!] Error writing '{target_path}': {e}{C_RESET}")
+def apply_model_edits(response_text, explicit_filename=None, user_prompt=""):
+    if not response_text:
+        return []
+    created_or_modified = []
+
+    # Strategy 0: Explicit filename passed by user (e.g. /apply filename.ext or /apply 1 filename.ext)
+    if explicit_filename:
+        explicit_filename = explicit_filename.strip().strip("'\"`")
+        raw_blocks = list(re.finditer(r"```(?:[a-zA-Z0-9_\-\.\/:]*)\s*\r?\n(.*?)```", response_text, re.DOTALL))
+        if raw_blocks:
+            best_code = max(raw_blocks, key=lambda m: len(m.group(1))).group(1)
+            if save_code_to_disk(explicit_filename, best_code):
+                created_or_modified.append(explicit_filename)
+        else:
+            if save_code_to_disk(explicit_filename, response_text.strip()):
+                created_or_modified.append(explicit_filename)
+        return created_or_modified
+
+    # Strategy 1: Explicit write / create / save / file tags: ```write:filepath or ```python:filepath
+    p1 = re.compile(r"```(?:write|create|save|file|[a-zA-Z0-9_\-]+)\s*:\s*([^\s\r\n`\'\"]+)\s*\r?\n(.*?)```", re.DOTALL)
+    for m in p1.finditer(response_text):
+        fname = m.group(1).strip()
+        code = m.group(2)
+        if "." in fname:
+            if save_code_to_disk(fname, code):
+                created_or_modified.append(fname)
+
+    # Strategy 2: Surgical search/replace edits (Aider style): ```edit:filepath
+    p2 = re.compile(r"```edit\s*:\s*([^\s\r\n`\'\"]+)\s*\r?\n(.*?)```", re.DOTALL)
+    for m in p2.finditer(response_text):
+        fname = m.group(1).strip()
+        code = m.group(2)
+        if apply_surgical_edit(fname, code):
+            created_or_modified.append(fname)
+
+    # Strategy 3: Direct filename on code fence: ```server.py or ```src/main.js
+    p3 = re.compile(r"```([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})\s*\r?\n(.*?)```", re.DOTALL)
+    for m in p3.finditer(response_text):
+        fname = m.group(1).strip()
+        code = m.group(2)
+        if fname not in created_or_modified:
+            if save_code_to_disk(fname, code):
+                created_or_modified.append(fname)
+
+    # Strategy 4: Standard code blocks with filename inside comment, in preceding markdown, or in user prompt
+    raw_blocks = list(re.finditer(r"```([a-zA-Z0-9_\-\.\/:]*)\s*\r?\n(.*?)```", response_text, re.DOTALL))
+    for m in raw_blocks:
+        tag = m.group(1).strip()
+        code = m.group(2)
+        if any(fname in created_or_modified for fname in [tag]):
+            continue
+
+        start_pos = m.start()
+        lookback = response_text[max(0, start_pos - 250):start_pos]
+        pre_lines = [l.strip() for l in lookback.splitlines() if l.strip()]
+        last_pre = pre_lines[-1] if pre_lines else ""
+
+        found_fname = None
+
+        # A: Check first 4 non-empty lines inside code block for comments
+        code_lines = [l.strip() for l in code.splitlines() if l.strip()]
+        for cl in code_lines[:4]:
+            cm = re.search(r"(?:#|//|<!--|/\*)\s*(?:filename|file|path)?\s*:?\s*([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})", cl, re.I)
+            if cm:
+                cand = cm.group(1).strip()
+                if "." in cand and not cand.startswith(("http:", "https:")):
+                    found_fname = cand
+                    break
+
+        # B: Check preceding line (e.g. **server.py**, ### server.py, `server.py`, File: server.py)
+        if not found_fname and last_pre:
+            pm = re.search(r"(?:file|filename|create|writing|in|save to)?[\s:`\'\"\*#]*([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})[\s:`\'\"\*#]*", last_pre, re.I)
+            if pm:
+                cand = pm.group(1).strip()
+                if "." in cand and not cand.startswith(("http:", "https:")):
+                    found_fname = cand
+
+        # C: Check user prompt (e.g. "create test.py with..." or "write /tmp/calc.py")
+        if not found_fname and user_prompt:
+            um = re.findall(r"[\"\'\`]?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})[\"\'\`]?", user_prompt)
+            valid_exts = {".py", ".sh", ".bash", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".rs", ".c", ".cpp", ".go", ".md", ".txt", ".sql", ".toml"}
+            for cand in um:
+                if os.path.splitext(cand)[1].lower() in valid_exts:
+                    found_fname = cand
+                    break
+
+        if found_fname and found_fname not in created_or_modified:
+            if save_code_to_disk(found_fname, code):
+                created_or_modified.append(found_fname)
+
+    # Strategy 5: Interactive fallback if code block exists but zero filenames detected anywhere
+    if not created_or_modified and raw_blocks:
+        best_block = max(raw_blocks, key=lambda m: len(m.group(2)))
+        tag = best_block.group(1).strip().lower()
+        code = best_block.group(2)
+        ext_map = {"python": ".py", "py": ".py", "bash": ".sh", "sh": ".sh", "javascript": ".js", "js": ".js", "typescript": ".ts", "ts": ".ts", "html": ".html", "css": ".css", "json": ".json", "rust": ".rs", "go": ".go", "c": ".c", "cpp": ".cpp"}
+        sug_ext = ext_map.get(tag, ".py")
+        sug_name = f"solution{sug_ext}"
+        print(f"\n{C_YELLOW}[?] Code block found ({len(code.splitlines())} lines), but no filename was detected.{C_RESET}")
+        try:
+            user_fname = input(f"{C_BOLD}{C_CYAN}Enter filename to save (e.g. {sug_name}) [or Enter to skip]: {C_RESET}").strip()
+            if user_fname:
+                if save_code_to_disk(user_fname, code):
+                    created_or_modified.append(user_fname)
+        except (KeyboardInterrupt, EOFError):
+            pass
 
     return created_or_modified
 
@@ -1213,11 +1290,12 @@ def run_parallel_swarm_session(model1_name, model2_name):
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     last_solutions = {"1": "", "2": ""}
+    last_user_prompt = ""
     m1_history = [
-        {"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code."}
+        {"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}
     ]
     m2_history = [
-        {"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling."}
+        {"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}
     ]
 
     while True:
@@ -1239,20 +1317,38 @@ def run_parallel_swarm_session(model1_name, model2_name):
             sys.exit(42)
 
         if prompt == "/clear":
-            m1_history = [{"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code."}]
-            m2_history = [{"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling."}]
+            m1_history = [{"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}]
+            m2_history = [{"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}]
             print(f"{C_YELLOW}✔ Conversation context cleared for both models.{C_RESET}")
             continue
 
         if prompt.startswith("/apply") or prompt.startswith("/save"):
             parts = prompt.split()
-            choice = parts[1] if len(parts) > 1 and parts[1] in ("1", "2") else "1"
+            choice = "1"
+            explicit_file = None
+            if len(parts) == 2:
+                if parts[1] in ("1", "2"):
+                    choice = parts[1]
+                else:
+                    explicit_file = parts[1]
+            elif len(parts) >= 3:
+                if parts[1] in ("1", "2"):
+                    choice = parts[1]
+                    explicit_file = parts[2]
+                else:
+                    explicit_file = parts[1]
+
             target_sol = last_solutions.get(choice)
+            if not target_sol and choice == "1" and last_solutions.get("2"):
+                target_sol = last_solutions.get("2")
+                choice = "2"
+
             if target_sol:
                 print(f"\n{C_CYAN}[*] Applying Model {choice} solution to workspace...{C_RESET}")
-                applied = apply_model_edits(target_sol)
+                applied = apply_model_edits(target_sol, explicit_filename=explicit_file, user_prompt=last_user_prompt)
                 if not applied:
                     print(f"{C_YELLOW}[!] No file modification blocks found in Model {choice} solution.{C_RESET}")
+                    print(f"{C_DIM}Tip: You can specify a filename directly: /apply {choice} <filename>{C_RESET}")
             else:
                 print(f"{C_YELLOW}[!] No generated solution to apply for Model {choice} yet.{C_RESET}")
             continue
@@ -1286,11 +1382,13 @@ def run_parallel_swarm_session(model1_name, model2_name):
             execute_shell_command(cmd_to_run, [])
             continue
 
+        last_user_prompt = prompt
         files_ctx = build_system_prompt()
         full_user_prompt = f"{prompt}\n\n{files_ctx}" if files_ctx else prompt
 
-        m1_messages = list(m1_history) + [{"role": "user", "content": full_user_prompt}]
-        m2_messages = list(m2_history) + [{"role": "user", "content": full_user_prompt}]
+        tag_inst = "\n\n[CRITICAL INSTRUCTION: When providing code, tag code blocks with the exact relative filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save the file directly to physical disk.]"
+        m1_messages = list(m1_history) + [{"role": "user", "content": f"{full_user_prompt}{tag_inst}"}]
+        m2_messages = list(m2_history) + [{"role": "user", "content": f"{full_user_prompt}{tag_inst}"}]
 
         import threading
         res_m2 = {}
@@ -1372,6 +1470,9 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     last_refined_solution = ""
+    last_arch_solution = ""
+    last_rev_solution = ""
+    last_user_prompt = ""
 
     while True:
         try:
@@ -1398,12 +1499,43 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                 print(f"{C_GREEN}✔ Debate depth set to {rounds} rounds.{C_RESET}")
             continue
 
-        if prompt in ("/apply", "/save"):
-            if last_refined_solution:
-                print(f"\n{C_CYAN}[*] Applying consensus code edits to workspace...{C_RESET}")
-                applied = apply_model_edits(last_refined_solution)
+        if prompt.startswith("/apply") or prompt.startswith("/save"):
+            parts = prompt.split()
+            choice = "consensus"
+            explicit_file = None
+            if len(parts) == 2:
+                if parts[1] in ("1", "2"):
+                    choice = parts[1]
+                else:
+                    explicit_file = parts[1]
+            elif len(parts) >= 3:
+                if parts[1] in ("1", "2"):
+                    choice = parts[1]
+                    explicit_file = parts[2]
+                else:
+                    explicit_file = parts[1]
+
+            target_sol = ""
+            if choice == "1":
+                target_sol = last_arch_solution
+            elif choice == "2":
+                target_sol = last_rev_solution
+            else:
+                target_sol = last_refined_solution or last_arch_solution or last_rev_solution
+
+            if target_sol:
+                print(f"\n{C_CYAN}[*] Applying code to workspace...{C_RESET}")
+                applied = apply_model_edits(target_sol, explicit_filename=explicit_file, user_prompt=last_user_prompt)
+                if not applied and choice == "consensus":
+                    for alt_name, alt_sol in [("Architect", last_arch_solution), ("Reviewer", last_rev_solution)]:
+                        if alt_sol and alt_sol != target_sol:
+                            print(f"{C_DIM}Checking {alt_name} code block...{C_RESET}")
+                            applied = apply_model_edits(alt_sol, explicit_filename=explicit_file, user_prompt=last_user_prompt)
+                            if applied:
+                                break
                 if not applied:
                     print(f"{C_YELLOW}[!] No file modification blocks found in last solution.{C_RESET}")
+                    print(f"{C_DIM}Tip: You can specify a filename directly: /apply <filename>{C_RESET}")
             else:
                 print(f"{C_YELLOW}[!] No generated solution to apply yet.{C_RESET}")
             continue
@@ -1438,6 +1570,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
             continue
 
         # Execute Multi-Turn Debate Loop
+        last_user_prompt = prompt
         files_ctx = build_system_prompt()
         current_proposal = ""
         current_critique = ""
@@ -1458,7 +1591,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                     f"Instructions:\n"
                     f"1. Formulate a comprehensive, production-grade technical solution or architecture.\n"
                     f"2. Explain your algorithmic decisions and trade-offs clearly.\n"
-                    f"3. Provide complete, working code blocks with filename tags (e.g. ```filename.ext) where applicable.\n"
+                    f"3. Provide complete, working code blocks tagged with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save it directly to disk.\n"
                 )
             else:
                 arch_prompt = (
@@ -1470,6 +1603,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                     f"1. Directly address every flaw, bug, edge case, and critique raised by the Reviewer.\n"
                     f"2. Defend choices that are technically justified with clear reasoning.\n"
                     f"3. Output a hardened, battle-tested Version {r} with corrected, complete code.\n"
+                    f"4. Tag all code blocks with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save it directly to disk.\n"
                 )
 
             arch_messages = [
@@ -1479,6 +1613,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
 
             arch_output, arch_spd, arch_toks = stream_chat(model1, arch_messages, color=C_CYAN)
             current_proposal = arch_output
+            last_arch_solution = arch_output
             last_refined_solution = arch_output
 
             spd_text = f"{arch_spd:.1f} tok/s" if arch_spd > 0 else ""
@@ -1519,6 +1654,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
 
             rev_output, rev_spd, rev_toks = stream_chat(model2, rev_messages, color=C_PURPLE)
             current_critique = rev_output
+            last_rev_solution = rev_output
 
             spd_text = f"{rev_spd:.1f} tok/s" if rev_spd > 0 else ""
             print(f"\n{C_DIM}└─ [{rev_toks} tokens {spd_text}]{C_RESET}")
@@ -1571,6 +1707,8 @@ def run_chat_session(model_name):
     history = [
         {"role": "system", "content": build_system_prompt()}
     ]
+    last_response_text = ""
+    last_user_prompt = ""
 
     while True:
         try:
@@ -1592,11 +1730,25 @@ def run_chat_session(model_name):
 
         if prompt == "/clear":
             history = [{"role": "system", "content": build_system_prompt()}]
+            last_response_text = ""
             print(f"{C_YELLOW}✔ Conversation context cleared.{C_RESET}")
             continue
 
         if prompt in ("/help", "/h", "?"):
             print_coding_agent_help()
+            continue
+
+        if prompt.startswith("/apply") or prompt.startswith("/save"):
+            parts = prompt.split()
+            explicit_file = parts[1] if len(parts) > 1 else None
+            if last_response_text:
+                print(f"\n{C_CYAN}[*] Applying code solution to workspace...{C_RESET}")
+                applied = apply_model_edits(last_response_text, explicit_filename=explicit_file, user_prompt=last_user_prompt)
+                if not applied:
+                    print(f"{C_YELLOW}[!] No file modification blocks found in last solution.{C_RESET}")
+                    print(f"{C_DIM}Tip: You can specify a filename directly: /apply <filename>{C_RESET}")
+            else:
+                print(f"{C_YELLOW}[!] No generated solution to apply yet.{C_RESET}")
             continue
 
         if prompt.startswith("/debate") or prompt.startswith("/swarm"):
@@ -1636,6 +1788,7 @@ def run_chat_session(model_name):
             continue
 
         # Keep system prompt completely synced with current workspace files
+        last_user_prompt = prompt
         history[0]["content"] = build_system_prompt()
         history.append({"role": "user", "content": prompt})
 
@@ -1650,8 +1803,9 @@ def run_chat_session(model_name):
         response_text, speed, tokens = stream_chat(model_name, history, color=C_CYAN)
         if response_text:
             history.append({"role": "assistant", "content": response_text})
+            last_response_text = response_text
             # Autonomous Aider-style File Modification Engine
-            apply_model_edits(response_text)
+            apply_model_edits(response_text, user_prompt=prompt)
 
         if speed > 0:
             if speed < 0.2:
