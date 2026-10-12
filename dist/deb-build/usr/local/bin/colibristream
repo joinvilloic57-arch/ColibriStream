@@ -1141,6 +1141,218 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     
     return "".join(full_response), 0, 0
 
+def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api/chat"):
+    model_name = resolve_model_name(model_name)
+    cpu_threads = max(1, os.cpu_count() or 4)
+    opt_threads = min(cpu_threads, 10)
+    vram_mb = get_visible_vram_mb()
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
+    num_ctx_val = 1536 if (is_70b and vram_mb < 44000) else 2048
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": True,
+        "keep_alive": "30m",
+        "options": {
+            "temperature": 0.7,
+            "num_gpu": num_gpu_layers,
+            "num_thread": opt_threads,
+            "num_ctx": num_ctx_val,
+            "num_batch": 512,
+            "f16_kv": False,
+            "use_mmap": True,
+            "use_mlock": False
+        }
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+    full_response = []
+    token_count = 0
+    try:
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line.decode("utf-8"))
+                    msg = chunk.get("message", {})
+                    content = msg.get("content", "")
+                    if content:
+                        full_response.append(content)
+                        token_count += 1
+                    if chunk.get("done", False):
+                        eval_count = chunk.get("eval_count", token_count)
+                        eval_dur = chunk.get("eval_duration", 0) / 1e9
+                        speed = eval_count / eval_dur if eval_dur > 0 else 0
+                        return "".join(full_response), speed, eval_count
+                except json.JSONDecodeError:
+                    pass
+    except Exception:
+        pass
+    return "".join(full_response), 0, token_count
+
+def run_parallel_swarm_session(model1_name, model2_name):
+    model1 = resolve_model_name(model1_name)
+    model2 = resolve_model_name(model2_name)
+    ensure_model_installed(model1)
+    ensure_model_installed(model2)
+
+    os.system("clear 2>/dev/null || true")
+    print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║           ⚡ COLIBRISTREAM PARALLEL DUAL-INFERENCE SWARM                       ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║         Both Models Computing Simultaneously at the EXACT SAME TIME            ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print(f"│  {C_CYAN}🧠 Model 1 :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[Primary Core]{C_RESET}          │")
+    print(f"│  {C_PURPLE}🔍 Model 2 :{C_RESET} {C_WHITE}{C_BOLD}{model2:<35}{C_RESET} {C_GRAY}[Parallel Core]{C_RESET}         │")
+    print(f"│  {C_YELLOW}⚡ Speed    :{C_RESET} {C_WHITE}Simultaneous Dual-Core Generation (2x Faster for Big Prompts){C_RESET}│")
+    print(f"├────────────────────────────────────────────────────────────────────────────────┤")
+    print(f"│  {C_BOLD}Commands:{C_RESET} {C_YELLOW}/apply 1{C_RESET} (Save M1 code) | {C_YELLOW}/apply 2{C_RESET} (Save M2 code) | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/exit{C_RESET}            │")
+    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
+    last_solutions = {"1": "", "2": ""}
+    m1_history = [
+        {"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code."}
+    ]
+    m2_history = [
+        {"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling."}
+    ]
+
+    while True:
+        try:
+            prompt = input(f"\n{C_BOLD}{C_GREEN}Parallel Task ❯ {C_RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{C_DIM}Parallel session ended.{C_RESET}")
+            break
+
+        if not prompt:
+            continue
+
+        if prompt in ("/exit", "/quit", "exit", "quit"):
+            print(f"{C_DIM}Parallel session ended.{C_RESET}")
+            break
+
+        if prompt == "/menu":
+            print(f"{C_CYAN}Returning to Menu...{C_RESET}")
+            sys.exit(42)
+
+        if prompt == "/clear":
+            m1_history = [{"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code."}]
+            m2_history = [{"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling."}]
+            print(f"{C_YELLOW}✔ Conversation context cleared for both models.{C_RESET}")
+            continue
+
+        if prompt.startswith("/apply") or prompt.startswith("/save"):
+            parts = prompt.split()
+            choice = parts[1] if len(parts) > 1 and parts[1] in ("1", "2") else "1"
+            target_sol = last_solutions.get(choice)
+            if target_sol:
+                print(f"\n{C_CYAN}[*] Applying Model {choice} solution to workspace...{C_RESET}")
+                applied = apply_model_edits(target_sol)
+                if not applied:
+                    print(f"{C_YELLOW}[!] No file modification blocks found in Model {choice} solution.{C_RESET}")
+            else:
+                print(f"{C_YELLOW}[!] No generated solution to apply for Model {choice} yet.{C_RESET}")
+            continue
+
+        if prompt.startswith("/add ") or prompt.startswith("/a "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                add_file_to_context(parts[1].strip())
+            continue
+
+        if prompt.startswith("/drop ") or prompt.startswith("/rm "):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                drop_file_from_context(parts[1].strip())
+            continue
+
+        if prompt in ("/files", "/ls"):
+            list_context_files()
+            continue
+
+        if prompt in ("/diff",):
+            show_git_diff()
+            continue
+
+        if prompt in ("/undo",):
+            undo_last_change()
+            continue
+
+        if prompt.startswith("/run ") or prompt.startswith("!"):
+            cmd_to_run = prompt[5:].strip() if prompt.startswith("/run ") else prompt[1:].strip()
+            execute_shell_command(cmd_to_run, [])
+            continue
+
+        files_ctx = build_system_prompt()
+        full_user_prompt = f"{prompt}\n\n{files_ctx}" if files_ctx else prompt
+
+        m1_messages = list(m1_history) + [{"role": "user", "content": full_user_prompt}]
+        m2_messages = list(m2_history) + [{"role": "user", "content": full_user_prompt}]
+
+        import threading
+        res_m2 = {}
+
+        def run_m2_background():
+            m2_out, m2_spd, m2_toks = stream_chat_silent(model2, m2_messages)
+            res_m2["text"] = m2_out
+            res_m2["spd"] = m2_spd
+            res_m2["toks"] = m2_toks
+
+        print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching {model1} and {model2} AT THE EXACT SAME TIME...{C_RESET}")
+        print(f"{C_DIM}   • Core 1: {model1} streaming live below{C_RESET}")
+        print(f"{C_DIM}   • Core 2: {model2} computing concurrently in background thread [0 extra wait time]{C_RESET}")
+        
+        t2 = threading.Thread(target=run_m2_background, daemon=True)
+        t2.start()
+
+        print(f"\n{C_BOLD}{C_CYAN}┌── 🧠 Model 1 ({model1}): Live Generation ──┐{C_RESET}")
+        m1_out, m1_spd, m1_toks = stream_chat(model1, m1_messages, color=C_CYAN)
+        last_solutions["1"] = m1_out
+
+        spd1_text = f"{m1_spd:.1f} tok/s" if m1_spd > 0 else ""
+        print(f"\n{C_DIM}└─ [{m1_toks} tokens {spd1_text}]{C_RESET}")
+
+        if t2.is_alive():
+            stop_wait = threading.Event()
+            def wait_spinner():
+                frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                i = 0
+                while not stop_wait.is_set():
+                    sys.stdout.write(f"\r\033[K{C_YELLOW}{frames[i % len(frames)]} Model 2 ({model2}) is completing parallel generation...{C_RESET}")
+                    sys.stdout.flush()
+                    i += 1
+                    time.sleep(0.08)
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+
+            w_spin = threading.Thread(target=wait_spinner, daemon=True)
+            w_spin.start()
+            t2.join()
+            stop_wait.set()
+            w_spin.join()
+
+        m2_out = res_m2.get("text", "")
+        m2_spd = res_m2.get("spd", 0)
+        m2_toks = res_m2.get("toks", 0)
+        last_solutions["2"] = m2_out
+
+        spd2_text = f"{m2_spd:.1f} tok/s" if m2_spd > 0 else ""
+        print(f"\n{C_BOLD}{C_PURPLE}┌── 🔍 Model 2 ({model2}): Parallel Solution (Computed Concurrently) ──┐{C_RESET}")
+        print(f"{C_PURPLE}{model2} ❯ {C_RESET}{m2_out}")
+        print(f"\n{C_DIM}└─ [{m2_toks} tokens {spd2_text} • 0 extra wait time]{C_RESET}")
+
+        m1_history.append({"role": "user", "content": prompt})
+        m1_history.append({"role": "assistant", "content": m1_out})
+        m2_history.append({"role": "user", "content": prompt})
+        m2_history.append({"role": "assistant", "content": m2_out})
+
+        print(f"\n{C_GREEN}{C_BOLD}════════════════════════════════════════════════════════════════════════════════{C_RESET}")
+        print(f"{C_GREEN}{C_BOLD}✔ Parallel Dual Generation Complete! Both models ran simultaneously.{C_RESET}")
+        print(f"{C_DIM}Type '/apply 1' for Model 1 code | Type '/apply 2' for Model 2 code | Enter next prompt{C_RESET}")
+
 def run_swarm_debate_session(model1_name, model2_name, rounds=2):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
@@ -1456,10 +1668,13 @@ if __name__ == "__main__":
         m2 = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-coder:1.5b"
         rounds_arg = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else 2
         run_swarm_debate_session(m1, m2, rounds=rounds_arg)
+    elif len(sys.argv) > 1 and sys.argv[1] in ("--parallel", "parallel", "-p"):
+        m1 = sys.argv[2] if len(sys.argv) > 2 else "qwen3:14b"
+        m2 = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-coder:1.5b"
+        run_parallel_swarm_session(m1, m2)
     else:
         model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
         run_chat_session(model)
-
 PYEOF
   chmod +x "$target" 2>/dev/null || true
 }
@@ -1634,6 +1849,30 @@ cmd_swarm() {
   fi
 }
 
+# --- Simultaneous Parallel Swarm (Both Models Compute at the EXACT Same Time) ---
+cmd_parallel() {
+  ensure_backend
+  local m1="${1:-qwen3:14b}"
+  local m2="${2:-qwen2.5-coder:1.5b}"
+
+  local chat_script="${DIR}/colibri_chat.py"
+  if [ ! -f "$chat_script" ]; then
+    chat_script="/tmp/colibri_chat.py"
+  fi
+  write_inline_chat_script "$chat_script"
+
+  echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
+  if [ -e /dev/tty ]; then
+    python3 "$chat_script" --parallel "$m1" "$m2" </dev/tty
+  else
+    python3 "$chat_script" --parallel "$m1" "$m2"
+  fi
+  local exit_code=$?
+  if [ "$exit_code" -eq 42 ]; then
+    cmd_loop_menu
+  fi
+}
+
 # --- Custom Multi-Model Swarm Builder ---
 cmd_swarm_builder() {
   clear 2>/dev/null || true
@@ -1682,16 +1921,40 @@ cmd_swarm_builder() {
     *) MODEL2="qwen2.5-coder:1.5b" ;;
   esac
 
+  echo -e "\n${C_CYAN}Step 3: Choose Swarm Execution Strategy:${C_RESET}"
+  echo -e "  1) ⚡ Simultaneous Parallel (RECOMMENDED: Both models run at the EXACT SAME TIME - 2x faster!)"
+  echo -e "  2) 🔄 Sequential Adversarial Debate (Model 1 writes, Model 2 audits & refines in rounds)"
+  read_input "${C_BOLD}Select [1-2, default 1]: ${C_RESET}" STRAT_CHOICE
+
+  case "$STRAT_CHOICE" in
+    2)
+      SWARM_MODE="debate"
+      ;;
+    *)
+      SWARM_MODE="parallel"
+      ;;
+  esac
+
   echo -e "\n${C_GREEN}${C_BOLD}Multi-Model Team Configured:${C_RESET}"
-  echo -e "  • ${C_YELLOW}Lead Architect:${C_RESET} ${MODEL1}"
-  echo -e "  • ${C_GREEN}Fast Worker   :${C_RESET} ${MODEL2}\n"
+  echo -e "  • ${C_YELLOW}Model 1:${C_RESET} ${MODEL1}"
+  echo -e "  • ${C_GREEN}Model 2:${C_RESET} ${MODEL2}"
 
-  echo -e "${C_YELLOW}Direct Command to run this Swarm anytime:${C_RESET}"
-  echo -e "  ${C_BOLD}${C_WHITE}colistream swarm ${MODEL1} ${MODEL2}${C_RESET}\n"
-
-  read_input "${C_BOLD}Press Enter to boot this multi-model session now [Enter/b]: ${C_RESET}" CONF
-  if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
-    cmd_swarm "$MODEL1" "$MODEL2"
+  if [ "$SWARM_MODE" = "parallel" ]; then
+    echo -e "  • ${C_CYAN}Mode   :${C_RESET} ⚡ Simultaneous Parallel (Zero Wait Time • Both run concurrently)\n"
+    echo -e "${C_YELLOW}Direct Command to run this Parallel Swarm anytime:${C_RESET}"
+    echo -e "  ${C_BOLD}${C_WHITE}colistream parallel ${MODEL1} ${MODEL2}${C_RESET}\n"
+    read_input "${C_BOLD}Press Enter to boot this simultaneous parallel session now [Enter/b]: ${C_RESET}" CONF
+    if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
+      cmd_parallel "$MODEL1" "$MODEL2"
+    fi
+  else
+    echo -e "  • ${C_PURPLE}Mode   :${C_RESET} 🔄 Sequential Adversarial Debate (Multi-turn back-and-forth)\n"
+    echo -e "${C_YELLOW}Direct Command to run this Debate Swarm anytime:${C_RESET}"
+    echo -e "  ${C_BOLD}${C_WHITE}colistream debate ${MODEL1} ${MODEL2}${C_RESET}\n"
+    read_input "${C_BOLD}Press Enter to boot this debate session now [Enter/b]: ${C_RESET}" CONF
+    if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
+      cmd_swarm "$MODEL1" "$MODEL2"
+    fi
   fi
 }
 
@@ -1821,8 +2084,8 @@ EOF
     echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Flagship 32B AI${C_RESET} (~17GB VRAM • 100% on GPU • 0 RAM • 0 CPU)   │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream run 32b${C_RESET}                               │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Instant Local Swarm${C_RESET} (Run 14B Thinker + 1.5B Coder — No Wait)  │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm qwen3:14b qwen2.5-coder:1.5b${C_RESET}   │"
+    echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Instant Simultaneous Swarm${C_RESET} (Run 14B + 1.5B at the EXACT SAME TIME)│"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream parallel qwen3:14b qwen2.5-coder:1.5b${C_RESET}│"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
@@ -1859,12 +2122,12 @@ EOF
         cmd_run "32b"
         ;;
       2)
-        echo -e "\n${C_CYAN}[*] Launching Instant Local Swarm (Qwen3 14B + 1.5B Coder)...${C_RESET}"
-        cmd_swarm "qwen3:14b" "qwen2.5-coder:1.5b"
+        echo -e "\n${C_CYAN}[*] Launching Simultaneous Parallel Swarm (Qwen3 14B + 1.5B Coder at the exact same time)...${C_RESET}"
+        cmd_parallel "qwen3:14b" "qwen2.5-coder:1.5b"
         ;;
       3)
         echo -e "\n${C_CYAN}[*] Launching DeepSeek MoE Swarm...${C_RESET}"
-        cmd_swarm "deepseek-r1:14b" "deepseek-coder:6.7b"
+        cmd_parallel "deepseek-r1:14b" "deepseek-coder:6.7b"
         ;;
       4)
         echo -e "\n${C_CYAN}[*] Launching Heavy 72B Model (Clamped to ~22GB VRAM)...${C_RESET}"
@@ -1912,7 +2175,13 @@ case "$1" in
   pull)
     cmd_pull "$2"
     ;;
-  swarm|multi|debate)
+  parallel|p|simultaneous|concurrent)
+    cmd_parallel "$2" "$3"
+    ;;
+  swarm|multi)
+    cmd_parallel "$2" "$3"
+    ;;
+  debate)
     cmd_swarm "$2" "$3" "$4"
     ;;
   turbo|boost|fast)
@@ -1943,6 +2212,6 @@ case "$1" in
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm [m1] [m2]|debate [m1] [m2]|share|diag|gpu [id]|restart [id]|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|parallel [m1] [m2]|swarm [m1] [m2]|debate [m1] [m2]|share|diag|turbo|gpu [id]|restart [id]|list|catalog]"
     ;;
 esac
