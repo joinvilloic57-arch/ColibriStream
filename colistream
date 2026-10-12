@@ -92,9 +92,21 @@ SYSCONF
 
   if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
     echo -e "${C_YELLOW}[*] Starting local inference daemon (Fast GPU: ${ACTIVE_GPU:-0})...${C_RESET}"
-    if command -v ollama >/dev/null 2>&1; then
+    if [ -x "${HOME}/.local/bin/ollama" ]; then
+      nohup "${HOME}/.local/bin/ollama" serve >/dev/null 2>&1 &
+      sleep 2
+    elif command -v ollama >/dev/null 2>&1; then
       nohup ollama serve >/dev/null 2>&1 &
       sleep 2
+    elif [ -x "${HOME}/.local/ollama/ollama" ]; then
+      nohup "${HOME}/.local/ollama/ollama" serve >/dev/null 2>&1 &
+      sleep 2
+    elif [ -d "${HOME}/Applications/Ollama.app" ]; then
+      open -a "${HOME}/Applications/Ollama.app" 2>/dev/null || nohup "${HOME}/Applications/Ollama.app/Contents/Resources/ollama" serve >/dev/null 2>&1 &
+      sleep 3
+    elif [ -d "/Applications/Ollama.app" ]; then
+      open -a "/Applications/Ollama.app" 2>/dev/null || nohup "/Applications/Ollama.app/Contents/Resources/ollama" serve >/dev/null 2>&1 &
+      sleep 3
     else
       echo -e "${C_RED}[ERROR] Local backend daemon not found.${C_RESET}"
       exit 1
@@ -123,69 +135,89 @@ DISK_HEADROOM=""
 
 run_hardware_scan() {
   CPU_ARCH=$(uname -m)
-  CPU_CORES=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1")
-  CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed -e 's/^[ \t]*//' || echo "Generic CPU")
-  NUMA_NODES=$(ls -d /sys/devices/system/node/node* 2>/dev/null | wc -l || echo "1")
-  if [ "$NUMA_NODES" -eq 0 ]; then NUMA_NODES=1; fi
+  if [ "$(uname -s)" = "Darwin" ]; then
+    CPU_CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo "8")
+    CPU_MODEL=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model 2>/dev/null || echo "Apple Silicon")
+    NUMA_NODES=1
+    SIMD_FEATURES=("Apple Silicon Metal" "NEON")
+    TOTAL_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo "8589934592")
+    TOTAL_MEM_GB=$((TOTAL_MEM_BYTES / 1024 / 1024 / 1024))
+    AVAIL_MEM_GB=$((TOTAL_MEM_GB * 75 / 100))
+    if [ "$AVAIL_MEM_GB" -lt 4 ]; then AVAIL_MEM_GB=4; fi
+    
+    GPU_COUNT=1
+    GPU_INDICES=(0)
+    GPU_NAMES=("Apple Silicon Metal GPU")
+    GPU_MEMS=("$((TOTAL_MEM_GB * 1024))")
+    GPU_LIST+=("Apple Silicon (Metal GPU) [${TOTAL_MEM_GB} GB Unified RAM]")
+    BEST_GPU_IDX=0
+    MAX_GPU_MEM=$((TOTAL_MEM_GB * 1024))
+    ACTIVE_GPU="0"
+  else
+    CPU_CORES=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1")
+    CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed -e 's/^[ \t]*//' || echo "Generic CPU")
+    NUMA_NODES=$(ls -d /sys/devices/system/node/node* 2>/dev/null | wc -l || echo "1")
+    if [ "$NUMA_NODES" -eq 0 ]; then NUMA_NODES=1; fi
 
-  SIMD_FEATURES=()
-  if grep -q "avx512" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX-512"); fi
-  if grep -q "avx2" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX2"); fi
-  if grep -q "fma" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("FMA"); fi
-  if grep -q "neon" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("NEON"); fi
-  if [ ${#SIMD_FEATURES[@]} -eq 0 ]; then SIMD_FEATURES+=("Scalar SSE4.2"); fi
+    SIMD_FEATURES=()
+    if grep -q "avx512" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX-512"); fi
+    if grep -q "avx2" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("AVX2"); fi
+    if grep -q "fma" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("FMA"); fi
+    if grep -q "neon" /proc/cpuinfo 2>/dev/null; then SIMD_FEATURES+=("NEON"); fi
+    if [ ${#SIMD_FEATURES[@]} -eq 0 ]; then SIMD_FEATURES+=("Scalar SSE4.2"); fi
 
-  TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-  AVAIL_MEM_KB=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-  TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
-  AVAIL_MEM_GB=$((AVAIL_MEM_KB / 1024 / 1024))
+    TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    AVAIL_MEM_KB=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
+    AVAIL_MEM_GB=$((AVAIL_MEM_KB / 1024 / 1024))
 
-  # GPU Multi-device Detection & Auto-Isolation
-  GPU_COUNT=0
-  GPU_LIST=()
-  GPU_INDICES=()
-  GPU_NAMES=()
-  GPU_MEMS=()
-  BEST_GPU_IDX=0
-  MAX_GPU_MEM=0
+    # GPU Multi-device Detection & Auto-Isolation
+    GPU_COUNT=0
+    GPU_LIST=()
+    GPU_INDICES=()
+    GPU_NAMES=()
+    GPU_MEMS=()
+    BEST_GPU_IDX=0
+    MAX_GPU_MEM=0
 
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    while IFS=, read -r gidx gname gmem; do
-      if [ -n "$gidx" ]; then
-        c_idx=$(echo "$gidx" | tr -d '[:space:]')
-        c_name=$(echo "$gname" | sed -e 's/^[ \t]*//;s/[ \t]*$//')
-        c_mem=$(echo "$gmem" | tr -d '[:space:]' | tr -d 'MiB' | tr -d 'MB')
-        
-        GPU_COUNT=$((GPU_COUNT + 1))
-        GPU_INDICES+=("$c_idx")
-        GPU_NAMES+=("$c_name")
-        GPU_MEMS+=("$c_mem")
-        GPU_LIST+=("${c_name} [${c_mem} MB]")
-        
-        if [ "$c_mem" -gt "$MAX_GPU_MEM" ] 2>/dev/null; then
-          MAX_GPU_MEM="$c_mem"
-          BEST_GPU_IDX="$c_idx"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      while IFS=, read -r gidx gname gmem; do
+        if [ -n "$gidx" ]; then
+          c_idx=$(echo "$gidx" | tr -d '[:space:]')
+          c_name=$(echo "$gname" | sed -e 's/^[ \t]*//;s/[ \t]*$//')
+          c_mem=$(echo "$gmem" | tr -d '[:space:]' | tr -d 'MiB' | tr -d 'MB')
+          
+          GPU_COUNT=$((GPU_COUNT + 1))
+          GPU_INDICES+=("$c_idx")
+          GPU_NAMES+=("$c_name")
+          GPU_MEMS+=("$c_mem")
+          GPU_LIST+=("${c_name} [${c_mem} MB]")
+          
+          if [ "$c_mem" -gt "$MAX_GPU_MEM" ] 2>/dev/null; then
+            MAX_GPU_MEM="$c_mem"
+            BEST_GPU_IDX="$c_idx"
+          fi
         fi
-      fi
-    done < <(nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)
-  fi
-
-  if [ "$GPU_COUNT" -eq 0 ] && command -v rocm-smi >/dev/null 2>&1; then
-    rocm_count=$(rocm-smi --showid 2>/dev/null | grep -c "GPU\[" || echo 0)
-    if [ "$rocm_count" -gt 0 ]; then
-      GPU_COUNT=$rocm_count
-      GPU_LIST+=("${GPU_COUNT}x AMD ROCm GPU(s)")
+      done < <(nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)
     fi
-  fi
 
-  if [ "$GPU_COUNT" -eq 0 ]; then
-    while IFS= read -r dev; do
-      if [ -n "$dev" ]; then
-        GPU_COUNT=$((GPU_COUNT + 1))
-        raw_name=$(echo "$dev" | cut -d: -f3 | sed -e 's/^[ \t]*//')
-        GPU_LIST+=("$raw_name")
+    if [ "$GPU_COUNT" -eq 0 ] && command -v rocm-smi >/dev/null 2>&1; then
+      rocm_count=$(rocm-smi --showid 2>/dev/null | grep -c "GPU\[" || echo 0)
+      if [ "$rocm_count" -gt 0 ]; then
+        GPU_COUNT=$rocm_count
+        GPU_LIST+=("${GPU_COUNT}x AMD ROCm GPU(s)")
       fi
-    done < <(lspci 2>/dev/null | grep -i -E "vga compatible controller|3d controller|display controller" || true)
+    fi
+
+    if [ "$GPU_COUNT" -eq 0 ]; then
+      while IFS= read -r dev; do
+        if [ -n "$dev" ]; then
+          GPU_COUNT=$((GPU_COUNT + 1))
+          raw_name=$(echo "$dev" | cut -d: -f3 | sed -e 's/^[ \t]*//')
+          GPU_LIST+=("$raw_name")
+        fi
+      done < <(lspci 2>/dev/null | grep -i -E "vga compatible controller|3d controller|display controller" || true)
+    fi
   fi
 
   # Determine Active GPU (Auto-Isolate Fast Card on Multi-GPU rigs)
