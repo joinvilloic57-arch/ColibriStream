@@ -476,3 +476,4 @@ gantt
 3. **Memory Pressure & OS Out-Of-Memory (OOM) Killer**:
    * *Risk*: Loading large models without sufficient headroom triggers OS OOM killer.
    * *Mitigation*: The hardware score engine strictly enforces a safety headroom buffer (minimum 10% host memory retained for OS processes) before allowing a model configuration to mount.
+# ColibriStream
