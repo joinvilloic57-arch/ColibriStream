@@ -654,6 +654,127 @@ def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api
         pass
     return "".join(full_response), 0, token_count
 
+def strip_ansi(s):
+    return re.sub(r'\x1b\[[0-9;]*m', '', s)
+
+def pad_truncate(s, width, color=C_WHITE):
+    clean = strip_ansi(s).replace("\t", "    ")
+    if len(clean) > width:
+        clean = clean[:width]
+    return f"{color}{clean}{C_RESET}" + (" " * max(0, width - len(clean)))
+
+def detect_swarm_file_targets(prompt):
+    tokens = re.findall(r'[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,6}', prompt)
+    valid_files = [t for t in tokens if not t.startswith(('http', 'www')) and not t.endswith(('.com', '.org', '.net', '.io'))]
+    if len(valid_files) >= 2:
+        return valid_files[0], valid_files[1]
+    elif len(valid_files) == 1:
+        f1 = valid_files[0]
+        ext = f1.split('.')[-1]
+        base = f1.rsplit('.', 1)[0]
+        return f1, f"{base}_worker.{ext}"
+
+    p_low = prompt.lower()
+    pairs = [
+        (('rust', 'server'), ('c', 'client'), ('server.rs', 'client.c')),
+        (('c', 'server'), ('rust', 'client'), ('server.c', 'client.rs')),
+        (('python', 'backend'), ('frontend', 'js'), ('backend.py', 'frontend.js')),
+        (('python', 'server'), ('client',), ('server.py', 'client.py')),
+        (('rust',), ('c',), ('server.rs', 'client.c')),
+        (('c',), ('assembly',), ('engine.c', 'kernel.s')),
+        (('asm',), ('c',), ('kernel.s', 'main.c')),
+        (('backend',), ('frontend',), ('backend.py', 'frontend.js')),
+        (('server',), ('client',), ('server.py', 'client.py')),
+        (('rust',), ('python',), ('core.rs', 'binding.py')),
+        (('html',), ('css',), ('index.html', 'style.css')),
+    ]
+    for c1, c2, (f1, f2) in pairs:
+        if all(w in p_low for w in c1) and all(w in p_low for w in c2):
+            return f1, f2
+
+    if 'rust' in p_low:
+        return 'server.rs', 'client.c'
+    if 'c' in p_low:
+        return 'server.c', 'client.c'
+    if 'python' in p_low or 'py' in p_low:
+        return 'server.py', 'client.py'
+    if 'go' in p_low:
+        return 'server.go', 'client.go'
+    if 'html' in p_low or 'web' in p_low:
+        return 'index.html', 'app.js'
+    return 'core_service.rs', 'worker_client.c'
+
+def sniff_file_from_code(text, default_name):
+    m = re.search(r"```(?:write|create|file|[a-zA-Z0-9_\-]+)?\s*:?\s*([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})", text)
+    if m and not m.group(1).startswith(("http:", "https:")):
+        return m.group(1).strip()
+    m = re.search(r"(?:#|//|<!--|/\*)\s*(?:filename|file|path)?\s*:?\s*([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})", text)
+    if m and not m.group(1).startswith(("http:", "https:")):
+        return m.group(1).strip()
+    return default_name
+
+def extract_code_block(text):
+    raw_blocks = list(re.finditer(r"```(?:[a-zA-Z0-9_\-\.\/:]*)\s*\r?\n(.*?)```", text, re.DOTALL))
+    if raw_blocks:
+        return max(raw_blocks, key=lambda m: len(m.group(1))).group(1).strip()
+    return text.strip()
+
+def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event):
+    api_url = "http://localhost:11434/api/chat"
+    opt_threads = min(os.cpu_count() or 8, 10)
+    vram_mb = get_visible_vram_mb()
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    num_gpu_layers = 38 if (is_70b and vram_mb < 44000) else 99
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": True,
+        "keep_alive": "30m",
+        "options": {
+            "temperature": 0.7,
+            "num_gpu": num_gpu_layers,
+            "num_thread": opt_threads,
+            "num_ctx": 2048,
+            "num_batch": 512,
+            "f16_kv": False,
+            "use_mmap": True,
+            "use_mlock": False
+        }
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+    start_t = time.time()
+    try:
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line.decode("utf-8"))
+                    msg = chunk.get("message", {})
+                    content = msg.get("content", "")
+                    if content:
+                        text_holder[0] += content
+                        stats_holder["tokens"] = stats_holder.get("tokens", 0) + 1
+                        elapsed = time.time() - start_t
+                        if elapsed > 0:
+                            stats_holder["speed"] = stats_holder["tokens"] / elapsed
+                    if chunk.get("done", False):
+                        eval_dur = chunk.get("eval_duration", 0) / 1e9
+                        eval_cnt = chunk.get("eval_count", stats_holder.get("tokens", 0))
+                        if eval_dur > 0:
+                            stats_holder["speed"] = eval_cnt / eval_dur
+                        stats_holder["tokens"] = eval_cnt
+                        break
+                except Exception:
+                    pass
+    except Exception as e:
+        text_holder[0] += f"\n[Inference Error: {e}]"
+    finally:
+        done_event.set()
+
 def run_parallel_swarm_session(model1_name, model2_name):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
@@ -662,37 +783,36 @@ def run_parallel_swarm_session(model1_name, model2_name):
 
     os.system("clear 2>/dev/null || true")
     print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}║           ⚡ COLIBRISTREAM PARALLEL DUAL-INFERENCE SWARM                       ║{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}║         Both Models Computing Simultaneously at the EXACT SAME TIME            ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║       ⚡ COLIBRISTREAM DUAL-CONSOLE PARALLEL SWARM (SIDE-BY-SIDE)              ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║      Both Models Coding Simultaneously at the EXACT SAME TIME (File 1 & 2)     ║{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
-    print(f"│  {C_CYAN}🧠 Model 1 :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[Primary Core]{C_RESET}          │")
-    print(f"│  {C_PURPLE}🔍 Model 2 :{C_RESET} {C_WHITE}{C_BOLD}{model2:<35}{C_RESET} {C_GRAY}[Parallel Core]{C_RESET}         │")
-    print(f"│  {C_YELLOW}⚡ Speed    :{C_RESET} {C_WHITE}Simultaneous Dual-Core Generation (2x Faster for Big Prompts){C_RESET}│")
+    print(f"│  {C_CYAN}🧠 CONSOLE 1 (Left)  :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[FILE 1 / Engine]{C_RESET}    │")
+    print(f"│  {C_PURPLE}🔍 CONSOLE 2 (Right) :{C_RESET} {C_WHITE}{C_BOLD}{model2:<35}{C_RESET} {C_GRAY}[FILE 2 / Worker]{C_RESET}    │")
+    print(f"│  {C_YELLOW}⚡ Simultaneous Execution:{C_RESET} {C_WHITE}2 AI streams running in parallel side-by-side!{C_RESET}       │")
     print(f"├────────────────────────────────────────────────────────────────────────────────┤")
-    print(f"│  {C_BOLD}Commands:{C_RESET} {C_YELLOW}/apply 1{C_RESET} (Save M1 code) | {C_YELLOW}/apply 2{C_RESET} (Save M2 code) | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/exit{C_RESET}            │")
+    print(f"│  {C_BOLD}Commands:{C_RESET} {C_YELLOW}/assign <f1> <f2>{C_RESET} | {C_YELLOW}/cat <file>{C_RESET} | {C_YELLOW}!cmd{C_RESET} | {C_YELLOW}/apply 1|2{C_RESET} | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/exit{C_RESET} │")
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     last_solutions = {"1": "", "2": ""}
     last_user_prompt = ""
-    m1_history = [
-        {"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}
-    ]
-    m2_history = [
-        {"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}
-    ]
+    assigned_targets = [None, None]
+    m1_history = []
+    m2_history = []
+
+    import threading
 
     while True:
         try:
-            prompt = input(f"\n{C_BOLD}{C_GREEN}Parallel Task ❯ {C_RESET}").strip()
+            prompt = input(f"\n{C_BOLD}{C_GREEN}Dual Swarm Task ❯ {C_RESET}").strip()
         except (KeyboardInterrupt, EOFError):
-            print(f"\n{C_DIM}Parallel session ended.{C_RESET}")
+            print(f"\n{C_DIM}Dual Swarm session ended.{C_RESET}")
             break
 
         if not prompt:
             continue
 
         if prompt in ("/exit", "/quit", "exit", "quit"):
-            print(f"{C_DIM}Parallel session ended.{C_RESET}")
+            print(f"{C_DIM}Dual Swarm session ended.{C_RESET}")
             break
 
         if prompt == "/menu":
@@ -700,9 +820,30 @@ def run_parallel_swarm_session(model1_name, model2_name):
             sys.exit(42)
 
         if prompt == "/clear":
-            m1_history = [{"role": "system", "content": f"You are Core 1 ({model1}) in a high-speed parallel dual-model swarm. Provide a comprehensive, complete, production-grade solution with full code. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}]
-            m2_history = [{"role": "system", "content": f"You are Core 2 ({model2}) in a high-speed parallel dual-model swarm. Provide an alternative, highly optimized, production-grade solution with full code and rigorous edge-case handling. Whenever providing code, always tag the code block with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so it can be saved directly to disk."}]
-            print(f"{C_YELLOW}✔ Conversation context cleared for both models.{C_RESET}")
+            m1_history = []
+            m2_history = []
+            assigned_targets = [None, None]
+            print(f"{C_YELLOW}✔ Conversation context cleared for both consoles.{C_RESET}")
+            continue
+
+        if prompt.startswith("/assign ") or prompt.startswith("/files "):
+            parts = prompt.split()
+            if len(parts) >= 3:
+                assigned_targets[0] = parts[1].strip()
+                assigned_targets[1] = parts[2].strip()
+                print(f"{C_GREEN}✔ Assigned: Console 1 -> {assigned_targets[0]} | Console 2 -> {assigned_targets[1]}{C_RESET}")
+            else:
+                print(f"{C_YELLOW}Usage: /assign <file1> <file2> (e.g. /assign server.rs client.c){C_RESET}")
+            continue
+
+        if prompt.startswith("/cat ") or prompt.startswith("/view "):
+            target_f = prompt.split(maxsplit=1)[1].strip()
+            if os.path.exists(target_f):
+                print(f"\n{C_CYAN}=== Contents of {target_f} ==={C_RESET}")
+                with open(target_f, "r", encoding="utf-8", errors="replace") as f:
+                    print(f.read())
+            else:
+                print(f"{C_YELLOW}[!] File '{target_f}' not found on disk.{C_RESET}")
             continue
 
         if prompt.startswith("/apply") or prompt.startswith("/save"):
@@ -727,13 +868,12 @@ def run_parallel_swarm_session(model1_name, model2_name):
                 choice = "2"
 
             if target_sol:
-                print(f"\n{C_CYAN}[*] Applying Model {choice} solution to workspace...{C_RESET}")
+                print(f"\n{C_CYAN}[*] Applying Console {choice} code to workspace...{C_RESET}")
                 applied = apply_model_edits(target_sol, explicit_filename=explicit_file, user_prompt=last_user_prompt)
                 if not applied:
-                    print(f"{C_YELLOW}[!] No file modification blocks found in Model {choice} solution.{C_RESET}")
-                    print(f"{C_DIM}Tip: You can specify a filename directly: /apply {choice} <filename>{C_RESET}")
+                    print(f"{C_YELLOW}[!] No file modification blocks found in Console {choice} code.{C_RESET}")
             else:
-                print(f"{C_YELLOW}[!] No generated solution to apply for Model {choice} yet.{C_RESET}")
+                print(f"{C_YELLOW}[!] No generated code to apply for Console {choice} yet.{C_RESET}")
             continue
 
         if prompt.startswith("/add ") or prompt.startswith("/a "):
@@ -746,10 +886,6 @@ def run_parallel_swarm_session(model1_name, model2_name):
             parts = prompt.split(maxsplit=1)
             if len(parts) > 1:
                 drop_file_from_context(parts[1].strip())
-            continue
-
-        if prompt in ("/files", "/ls"):
-            list_context_files()
             continue
 
         if prompt in ("/diff",):
@@ -765,74 +901,193 @@ def run_parallel_swarm_session(model1_name, model2_name):
             execute_shell_command(cmd_to_run, [])
             continue
 
+        f1_cand, f2_cand = detect_swarm_file_targets(prompt)
+        file1 = assigned_targets[0] or f1_cand
+        file2 = assigned_targets[1] or f2_cand
+
         last_user_prompt = prompt
         files_ctx = build_system_prompt()
-        full_user_prompt = f"{prompt}\n\n{files_ctx}" if files_ctx else prompt
+        ctx_inject = f"\n\n{files_ctx}" if files_ctx else ""
 
-        tag_inst = "\n\n[CRITICAL INSTRUCTION: When providing code, tag code blocks with the exact relative filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save the file directly to physical disk.]"
-        m1_messages = list(m1_history) + [{"role": "user", "content": f"{full_user_prompt}{tag_inst}"}]
-        m2_messages = list(m2_history) + [{"role": "user", "content": f"{full_user_prompt}{tag_inst}"}]
+        m1_sys = (
+            f"You are CONSOLE 1 ({model1}) in a 2-AI simultaneous coding swarm.\n"
+            f"You and CONSOLE 2 ({model2}) are coding at the EXACT SAME TIME in a dual side-by-side terminal console.\n\n"
+            f"YOUR TASK DIVISION:\n"
+            f"- You are strictly responsible for FILE 1: '{file1}' (the core engine, server, library, or primary component).\n"
+            f"- CONSOLE 2 is simultaneously writing FILE 2: '{file2}' (the client, consumer, worker, or interface).\n"
+            f"- Do NOT write File 2. Focus 100% of your code on '{file1}' with complete production-grade implementation.\n"
+            f"- CRITICAL: On line 1 of your code block, declare: ```write:{file1}\n"
+        )
 
-        import threading
-        res_m2 = {}
+        m2_sys = (
+            f"You are CONSOLE 2 ({model2}) in a 2-AI simultaneous coding swarm.\n"
+            f"You and CONSOLE 1 ({model1}) are coding at the EXACT SAME TIME in a dual side-by-side terminal console.\n\n"
+            f"YOUR TASK DIVISION:\n"
+            f"- You are strictly responsible for FILE 2: '{file2}' (the client, interface, consumer, worker, or secondary component).\n"
+            f"- CONSOLE 1 is simultaneously writing FILE 1: '{file1}' (the core engine, server, library, or primary component).\n"
+            f"- Do NOT write File 1. Focus 100% of your code on '{file2}' ensuring it communicates seamlessly with '{file1}'.\n"
+            f"- CRITICAL: On line 1 of your code block, declare: ```write:{file2}\n"
+        )
 
-        def run_m2_background():
-            m2_out, m2_spd, m2_toks = stream_chat_silent(model2, m2_messages)
-            res_m2["text"] = m2_out
-            res_m2["spd"] = m2_spd
-            res_m2["toks"] = m2_toks
+        m1_messages = [{"role": "system", "content": m1_sys}] + list(m1_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
+        m2_messages = [{"role": "system", "content": m2_sys}] + list(m2_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
 
-        print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching {model1} and {model2} AT THE EXACT SAME TIME...{C_RESET}")
-        print(f"{C_DIM}   • Core 1: {model1} streaming live below{C_RESET}")
-        print(f"{C_DIM}   • Core 2: {model2} computing concurrently in background thread [0 extra wait time]{C_RESET}")
-        
-        t2 = threading.Thread(target=run_m2_background, daemon=True)
-        t2.start()
+        t1_text = [""]
+        t2_text = [""]
+        t1_stats = {"tokens": 0, "speed": 0.0}
+        t2_stats = {"tokens": 0, "speed": 0.0}
+        done1 = threading.Event()
+        done2 = threading.Event()
 
-        print(f"\n{C_BOLD}{C_CYAN}┌── 🧠 Model 1 ({model1}): Live Generation ──┐{C_RESET}")
-        m1_out, m1_spd, m1_toks = stream_chat(model1, m1_messages, color=C_CYAN)
-        last_solutions["1"] = m1_out
+        print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching CONSOLE 1 ({model1} -> {file1}) & CONSOLE 2 ({model2} -> {file2}) SIDE-BY-SIDE...{C_RESET}\n")
 
-        spd1_text = f"{m1_spd:.1f} tok/s" if m1_spd > 0 else ""
-        print(f"\n{C_DIM}└─ [{m1_toks} tokens {spd1_text}]{C_RESET}")
+        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1), daemon=True)
+        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2), daemon=True)
+        th1.start()
+        th2.start()
 
-        if t2.is_alive():
-            stop_wait = threading.Event()
-            def wait_spinner():
-                frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-                i = 0
-                while not stop_wait.is_set():
-                    sys.stdout.write(f"\r\033[K{C_YELLOW}{frames[i % len(frames)]} Model 2 ({model2}) is completing parallel generation...{C_RESET}")
-                    sys.stdout.flush()
-                    i += 1
-                    time.sleep(0.08)
-                sys.stdout.write("\r\033[K")
-                sys.stdout.flush()
+        first_render = True
+        total_rows_drawn = 0
 
-            w_spin = threading.Thread(target=wait_spinner, daemon=True)
-            w_spin.start()
-            t2.join()
-            stop_wait.set()
-            w_spin.join()
+        while not (done1.is_set() and done2.is_set()):
+            term_w = shutil.get_terminal_size((80, 24)).columns
+            term_h = shutil.get_terminal_size((80, 24)).lines
+            term_w = max(term_w, 76)
+            col_w = (term_w - 7) // 2
+            view_h = max(8, min(term_h - 10, 18))
 
-        m2_out = res_m2.get("text", "")
-        m2_spd = res_m2.get("spd", 0)
-        m2_toks = res_m2.get("toks", 0)
-        last_solutions["2"] = m2_out
+            sniff1 = sniff_file_from_code(t1_text[0], file1)
+            sniff2 = sniff_file_from_code(t2_text[0], file2)
 
-        spd2_text = f"{m2_spd:.1f} tok/s" if m2_spd > 0 else ""
-        print(f"\n{C_BOLD}{C_PURPLE}┌── 🔍 Model 2 ({model2}): Parallel Solution (Computed Concurrently) ──┐{C_RESET}")
-        print(f"{C_PURPLE}{model2} ❯ {C_RESET}{m2_out}")
-        print(f"\n{C_DIM}└─ [{m2_toks} tokens {spd2_text} • 0 extra wait time]{C_RESET}")
+            lines1 = t1_text[0].splitlines()
+            lines2 = t2_text[0].splitlines()
+
+            v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
+            v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
+
+            m1_label = f"CONSOLE 1: {model1[:12]} [{sniff1}]"
+            m2_label = f"CONSOLE 2: {model2[:12]} [{sniff2}]"
+
+            top_l = f"┌── 🧠 {m1_label} "
+            top_l += "─" * max(0, col_w + 2 - len(top_l))
+            top_r = f"┬── 🔍 {m2_label} "
+            top_r += "─" * max(0, col_w + 2 - len(top_r)) + "┐"
+            border_top = f"{C_BOLD}{C_GREEN}{top_l}{top_r}{C_RESET}"
+
+            s1_info = f"Spd: {t1_stats.get('speed', 0.0):.1f} tok/s | Tok: {t1_stats.get('tokens', 0)}"
+            s2_info = f"Spd: {t2_stats.get('speed', 0.0):.1f} tok/s | Tok: {t2_stats.get('tokens', 0)}"
+            status_l = f"│ {s1_info:<{col_w}} "
+            status_r = f"│ {s2_info:<{col_w}} │"
+            border_status = f"{C_CYAN}{status_l}{C_PURPLE}{status_r}{C_RESET}"
+
+            mid_l = "├──" + ("─" * col_w)
+            mid_r = "┼──" + ("─" * col_w) + "┤"
+            border_mid = f"{C_GREEN}{mid_l}{mid_r}{C_RESET}"
+
+            content_rows = []
+            for i in range(view_h):
+                row_l = pad_truncate(v1[i], col_w, C_CYAN)
+                row_r = pad_truncate(v2[i], col_w, C_PURPLE)
+                content_rows.append(f"{C_GREEN}│{C_RESET} {row_l} {C_GREEN}│{C_RESET} {row_r} {C_GREEN}│{C_RESET}")
+
+            bot_l = "└──" + ("─" * col_w)
+            bot_r = "┴──" + ("─" * col_w) + "┘"
+            border_bot = f"{C_BOLD}{C_GREEN}{bot_l}{bot_r}{C_RESET}"
+
+            frame = [border_top, border_status, border_mid] + content_rows + [border_bot]
+
+            if not first_render:
+                sys.stdout.write(f"\033[{total_rows_drawn}A")
+            first_render = False
+            total_rows_drawn = len(frame)
+
+            for r in frame:
+                sys.stdout.write(f"\r\033[K{r}\n")
+            sys.stdout.flush()
+            time.sleep(0.04)
+
+        th1.join()
+        th2.join()
+
+        sniff1 = sniff_file_from_code(t1_text[0], file1)
+        sniff2 = sniff_file_from_code(t2_text[0], file2)
+        lines1 = t1_text[0].splitlines()
+        lines2 = t2_text[0].splitlines()
+
+        term_w = shutil.get_terminal_size((80, 24)).columns
+        term_h = shutil.get_terminal_size((80, 24)).lines
+        term_w = max(term_w, 76)
+        col_w = (term_w - 7) // 2
+        view_h = max(8, min(term_h - 10, 18))
+
+        v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
+        v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
+
+        top_l = f"┌── 🧠 CONSOLE 1: {model1[:12]} [{sniff1}] ✔ COMPLETE "
+        top_l += "─" * max(0, col_w + 2 - len(top_l))
+        top_r = f"┬── 🔍 CONSOLE 2: {model2[:12]} [{sniff2}] ✔ COMPLETE "
+        top_r += "─" * max(0, col_w + 2 - len(top_r)) + "┐"
+        border_top = f"{C_BOLD}{C_GREEN}{top_l}{top_r}{C_RESET}"
+
+        s1_info = f"DONE: {t1_stats.get('tokens', 0)} tok ({t1_stats.get('speed', 0.0):.1f} t/s)"
+        s2_info = f"DONE: {t2_stats.get('tokens', 0)} tok ({t2_stats.get('speed', 0.0):.1f} t/s)"
+        status_l = f"│ {s1_info:<{col_w}} "
+        status_r = f"│ {s2_info:<{col_w}} │"
+        border_status = f"{C_CYAN}{status_l}{C_PURPLE}{status_r}{C_RESET}"
+
+        mid_l = "├──" + ("─" * col_w)
+        mid_r = "┼──" + ("─" * col_w) + "┤"
+        border_mid = f"{C_GREEN}{mid_l}{mid_r}{C_RESET}"
+
+        content_rows = []
+        for i in range(view_h):
+            row_l = pad_truncate(v1[i], col_w, C_CYAN)
+            row_r = pad_truncate(v2[i], col_w, C_PURPLE)
+            content_rows.append(f"{C_GREEN}│{C_RESET} {row_l} {C_GREEN}│{C_RESET} {row_r} {C_GREEN}│{C_RESET}")
+
+        bot_l = "└──" + ("─" * col_w)
+        bot_r = "┴──" + ("─" * col_w) + "┘"
+        border_bot = f"{C_BOLD}{C_GREEN}{bot_l}{bot_r}{C_RESET}"
+
+        final_frame = [border_top, border_status, border_mid] + content_rows + [border_bot]
+        sys.stdout.write(f"\033[{total_rows_drawn}A")
+        for r in final_frame:
+            sys.stdout.write(f"\r\033[K{r}\n")
+        sys.stdout.flush()
+
+        last_solutions["1"] = t1_text[0]
+        last_solutions["2"] = t2_text[0]
+
+        # Automatic dual-file disk save
+        saved1 = apply_model_edits(t1_text[0], explicit_filename=sniff1, user_prompt=prompt)
+        saved2 = apply_model_edits(t2_text[0], explicit_filename=sniff2, user_prompt=prompt)
+
+        file1_saved = saved1[0] if saved1 else sniff1
+        file2_saved = saved2[0] if saved2 else sniff2
+
+        if not saved1 and t1_text[0].strip():
+            code1 = extract_code_block(t1_text[0])
+            if save_code_to_disk(file1_saved, code1):
+                saved1 = [file1_saved]
+        if not saved2 and t2_text[0].strip():
+            code2 = extract_code_block(t2_text[0])
+            if save_code_to_disk(file2_saved, code2):
+                saved2 = [file2_saved]
+
+        lines1_cnt = len(open(file1_saved, "r", errors="ignore").readlines()) if os.path.exists(file1_saved) else len(lines1)
+        lines2_cnt = len(open(file2_saved, "r", errors="ignore").readlines()) if os.path.exists(file2_saved) else len(lines2)
+
+        print(f"\n{C_BOLD}{C_GREEN}┌── ⚡ DUAL-CORE AUTO-SAVE COMPLETE ──────────────────────────────────────────┐{C_RESET}")
+        print(f"│  {C_GREEN}✔{C_RESET} {C_CYAN}CONSOLE 1 ({model1[:14]}){C_RESET} saved FILE 1: {C_BOLD}{file1_saved:<20}{C_RESET} ({lines1_cnt} lines on disk) │")
+        print(f"│  {C_GREEN}✔{C_RESET} {C_PURPLE}CONSOLE 2 ({model2[:14]}){C_RESET} saved FILE 2: {C_BOLD}{file2_saved:<20}{C_RESET} ({lines2_cnt} lines on disk) │")
+        print(f"│  {C_WHITE}Both files written directly to physical disk in workspace!{C_RESET}                 │")
+        print(f"│  {C_DIM}Run '!command' or '/run' to test (e.g. !cargo build or !gcc client.c){C_RESET}     │")
+        print(f"{C_BOLD}{C_GREEN}└─────────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
         m1_history.append({"role": "user", "content": prompt})
-        m1_history.append({"role": "assistant", "content": m1_out})
+        m1_history.append({"role": "assistant", "content": t1_text[0]})
         m2_history.append({"role": "user", "content": prompt})
-        m2_history.append({"role": "assistant", "content": m2_out})
-
-        print(f"\n{C_GREEN}{C_BOLD}════════════════════════════════════════════════════════════════════════════════{C_RESET}")
-        print(f"{C_GREEN}{C_BOLD}✔ Parallel Dual Generation Complete! Both models ran simultaneously.{C_RESET}")
-        print(f"{C_DIM}Type '/apply 1' for Model 1 code | Type '/apply 2' for Model 2 code | Enter next prompt{C_RESET}")
+        m2_history.append({"role": "assistant", "content": t2_text[0]})
 
 def run_swarm_debate_session(model1_name, model2_name, rounds=2):
     model1 = resolve_model_name(model1_name)
