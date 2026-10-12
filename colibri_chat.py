@@ -636,6 +636,7 @@ def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api
     vram_mb = get_visible_vram_mb()
     m_lower = model_name.lower()
     gpu_cnt = get_gpu_count()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
     num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
     num_ctx_val = 2048 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 1536
 
@@ -752,6 +753,8 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     opt_threads = min(os.cpu_count() or 8, 10)
     vram_mb = get_visible_vram_mb()
     gpu_cnt = get_gpu_count()
+    m_lower = model_name.lower()
+    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
     num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
 
     payload = {
@@ -807,6 +810,50 @@ def run_parallel_swarm_session(model1_name, model2_name):
     model2 = resolve_model_name(model2_name)
     ensure_model_installed(model1)
     ensure_model_installed(model2)
+
+    # Pre-warm & pin both models in VRAM for instant simultaneous execution
+    def _warm_worker(m):
+        try:
+            url = "http://localhost:11434/api/generate"
+            payload = {"model": resolve_model_name(m), "keep_alive": "30m"}
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=120)
+        except Exception:
+            pass
+
+    sys.stdout.write(f"\n{C_YELLOW}[*] Pre-warming & pinning both models in VRAM for instant simultaneous generation...{C_RESET}\n")
+    sys.stdout.flush()
+    import threading
+    _wt1 = threading.Thread(target=_warm_worker, args=(model1,), daemon=True)
+    _wt2 = threading.Thread(target=_warm_worker, args=(model2,), daemon=True)
+    _wt1.start()
+    _wt2.start()
+    _wt1.join()
+    _wt2.join()
+
+    # Verify if Ollama backend kept both in VRAM simultaneously
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/ps")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            active_names = [x.get("name", "") for x in data.get("models", [])]
+            r1 = resolve_model_name(model1)
+            r2 = resolve_model_name(model2)
+            has1 = any(r1 in n or n in r1 for n in active_names)
+            has2 = any(r2 in n or n in r2 for n in active_names)
+            if not (has1 and has2):
+                print(f"\n{C_YELLOW}┌── MULTI-MODEL PARALLEL ADVISORY ──────────────────────────────────────┐{C_RESET}")
+                print(f"│ {C_BOLD}Notice{C_RESET} : Ollama background service is configured to keep 1 model in VRAM │")
+                print(f"│ To unlock TRUE SIMULTANEOUS execution (both models coding at once):   │")
+                print(f"│ Run: {C_BOLD}sudo systemctl set-environment OLLAMA_MAX_LOADED_MODELS=4 OLLAMA_NUM_PARALLEL=4{C_RESET} │")
+                print(f"│      {C_BOLD}sudo systemctl restart ollama{C_RESET}                                    │")
+                print(f"└────────────────────────────────────────────────────────────────────────┘\n")
+                time.sleep(2)
+            else:
+                print(f"{C_GREEN}✔ Both models resident in memory simultaneously ({model1} + {model2})!{C_RESET}")
+                time.sleep(1)
+    except Exception:
+        pass
 
     os.system("clear 2>/dev/null || true")
     print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
@@ -989,8 +1036,15 @@ def run_parallel_swarm_session(model1_name, model2_name):
             lines1 = t1_text[0].splitlines()
             lines2 = t2_text[0].splitlines()
 
-            v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
-            v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
+            if not t1_text[0].strip():
+                v1 = [f"{C_YELLOW}⚡ Initializing model & generating code...{C_RESET}"] + [""] * (view_h - 1)
+            else:
+                v1 = lines1[-view_h:] if len(lines1) > view_h else lines1 + [""] * (view_h - len(lines1))
+
+            if not t2_text[0].strip():
+                v2 = [f"{C_YELLOW}⚡ Initializing model & generating code...{C_RESET}"] + [""] * (view_h - 1)
+            else:
+                v2 = lines2[-view_h:] if len(lines2) > view_h else lines2 + [""] * (view_h - len(lines2))
 
             m1_label = f"CONSOLE 1: {model1[:12]} [{sniff1}]"
             m2_label = f"CONSOLE 2: {model2[:12]} [{sniff2}]"
@@ -1001,8 +1055,8 @@ def run_parallel_swarm_session(model1_name, model2_name):
             top_r += "─" * max(0, col_w + 2 - len(top_r)) + "┐"
             border_top = f"{C_BOLD}{C_GREEN}{top_l}{top_r}{C_RESET}"
 
-            s1_info = f"Spd: {t1_stats.get('speed', 0.0):.1f} tok/s | Tok: {t1_stats.get('tokens', 0)}"
-            s2_info = f"Spd: {t2_stats.get('speed', 0.0):.1f} tok/s | Tok: {t2_stats.get('tokens', 0)}"
+            s1_info = f"DONE ({t1_stats.get('tokens',0)} tok)" if done1.is_set() else f"Spd: {t1_stats.get('speed', 0.0):.1f} tok/s | Tok: {t1_stats.get('tokens', 0)}"
+            s2_info = f"DONE ({t2_stats.get('tokens',0)} tok)" if done2.is_set() else f"Spd: {t2_stats.get('speed', 0.0):.1f} tok/s | Tok: {t2_stats.get('tokens', 0)}"
             status_l = f"│ {s1_info:<{col_w}} "
             status_r = f"│ {s2_info:<{col_w}} │"
             border_status = f"{C_CYAN}{status_l}{C_PURPLE}{status_r}{C_RESET}"
