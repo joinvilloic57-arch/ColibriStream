@@ -453,7 +453,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat")
             "num_thread": opt_threads,
             "num_ctx": num_ctx_val,
             "num_batch": num_batch_val,
-            "f16_kv": True,
+            "f16_kv": False,
             "use_mmap": True,
             "use_mlock": False
         }
