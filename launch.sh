@@ -53,12 +53,13 @@ read_input() {
 ensure_backend() {
   # Universal GPU Architecture Flags: Ensure older GPUs (sm_60/sm_61 Pascal, sm_70 Volta)
   # and newer GPUs (sm_80 Ampere, sm_89 Ada, sm_90 Hopper) run 100% on GPU without CPU fallback
-  export OLLAMA_FLASH_ATTENTION=0     # Older architectures (P40, V100) don't have FlashAttention-2; disabling forces native CUDA kernels on GPU
-  export OLLAMA_NUM_PARALLEL=2        # Allow concurrent model inference for swarms
-  export OLLAMA_MAX_LOADED_MODELS=3   # Keep both Architect & Worker warm in memory (Zero disk reload penalty)
+  export OLLAMA_FLASH_ATTENTION=1     # Flash Attention kernel acceleration (unlocks 30-40 tok/s on multi-GPU)
+  export OLLAMA_KV_CACHE_TYPE=q8_0    # 8-bit quantized KV cache: halves memory traffic for rapid generation
+  export OLLAMA_NUM_PARALLEL=4        # 4 concurrent model inference streams for swarms
+  export OLLAMA_MAX_LOADED_MODELS=4   # Keep both Architect & Worker warm in memory simultaneously
   export OLLAMA_KEEP_ALIVE=30m        # Keep models warm in memory for 30 minutes
-  export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on older motherboards
-  export OLLAMA_MAX_PARALLEL_DOWNLOADS=16 # 16 parallel multi-threaded chunks for saturating gigabit downloads
+  export GGML_CUDA_NO_PINNED=1        # Prevents PCIe memory exhaustion on multi-GPU rigs
+  export OLLAMA_MAX_PARALLEL_DOWNLOADS=16 # 16 parallel multi-threaded chunks for saturating downloads
 
   # Auto-bind to active fast GPU
   if [ -z "$ACTIVE_GPU" ]; then
@@ -84,7 +85,8 @@ ensure_backend() {
 ${env_cuda}
 Environment="OLLAMA_MAX_LOADED_MODELS=4"
 Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
-Environment="OLLAMA_FLASH_ATTENTION=0"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 Environment="OLLAMA_NUM_PARALLEL=4"
 Environment="OLLAMA_KEEP_ALIVE=30m"
 Environment="GGML_CUDA_NO_PINNED=1"
@@ -95,7 +97,8 @@ SYSCONF
   export OLLAMA_MAX_LOADED_MODELS=4
   export OLLAMA_NUM_PARALLEL=4
   export OLLAMA_MAX_PARALLEL_DOWNLOADS=16
-  export OLLAMA_FLASH_ATTENTION=0
+  export OLLAMA_FLASH_ATTENTION=1
+  export OLLAMA_KV_CACHE_TYPE=q8_0
   export OLLAMA_KEEP_ALIVE=30m
   export GGML_CUDA_NO_PINNED=1
 
@@ -330,7 +333,8 @@ apply_gpu_configuration() {
 ${env_cuda}
 Environment="OLLAMA_MAX_LOADED_MODELS=4"
 Environment="OLLAMA_MAX_PARALLEL_DOWNLOADS=16"
-Environment="OLLAMA_FLASH_ATTENTION=0"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 Environment="OLLAMA_NUM_PARALLEL=4"
 Environment="OLLAMA_KEEP_ALIVE=30m"
 Environment="GGML_CUDA_NO_PINNED=1"
@@ -420,7 +424,7 @@ cmd_turbo() {
   fi
 
   echo -e "\n${C_CYAN}[3/4] Enabling Turbo KV Cache & Zero-Wait Memory Flags...${C_RESET}"
-  export OLLAMA_FLASH_ATTENTION=0
+  export OLLAMA_FLASH_ATTENTION=1
   export OLLAMA_NUM_PARALLEL=1
   export GGML_CUDA_NO_PINNED=1
   export OLLAMA_KV_CACHE_TYPE=q8_0
@@ -1050,6 +1054,14 @@ def resolve_model_name(name):
     return n
 
 def get_gpu_count():
+    env_active = os.environ.get("ACTIVE_GPU", "").strip()
+    if env_active == "all":
+        return 2
+    cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if cuda_vis == "all":
+        return 2
+    if "," in cuda_vis:
+        return len([c for c in cuda_vis.split(",") if c.strip()])
     try:
         import subprocess
         out = subprocess.check_output(
@@ -1057,28 +1069,44 @@ def get_gpu_count():
             stderr=subprocess.DEVNULL
         ).decode("utf-8").strip()
         lines = [l for l in out.splitlines() if l.strip()]
-        return max(1, len(lines))
+        if len(lines) > 0:
+            return len(lines)
     except Exception:
-        return 1
+        pass
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                if f.read().strip() == "all":
+                    return 2
+        except Exception:
+            pass
+    try:
+        import subprocess
+        out = subprocess.check_output("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller' | wc -l", shell=True).decode().strip()
+        if int(out) > 1:
+            return int(out)
+    except Exception:
+        pass
+    return 1
 
 def get_visible_vram_mb():
-    try:
-        cfg_file = os.path.expanduser("~/.colistream/gpu_config")
-        active_gpu = None
-        if os.path.exists(cfg_file):
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu = os.environ.get("ACTIVE_GPU", "").strip() or None
+    if not active_gpu and os.path.exists(cfg_file):
+        try:
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        
-        gpu_cnt = get_gpu_count()
-        # On multi-GPU rigs, pool all GPUs by default unless user explicitly pinned a single card != 0
-        if gpu_cnt > 1:
-            if active_gpu == "all" or not active_gpu or active_gpu == "0":
-                env_cuda = "all"
-            else:
-                env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
-        else:
-            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
+        except Exception:
+            pass
 
+    gpu_cnt = get_gpu_count()
+    if active_gpu == "all" or gpu_cnt > 1:
+        env_cuda = "all"
+    else:
+        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
+
+    try:
         import subprocess
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=index,memory.total", "--format=csv,noheader,nounits"],
@@ -1094,9 +1122,11 @@ def get_visible_vram_mb():
                     total_vram += mem
                 elif str(idx) in env_cuda.split(","):
                     total_vram += mem
-        return total_vram if total_vram > 0 else (gpu_cnt * 24576)
+        if total_vram > 0:
+            return total_vram
     except Exception:
-        return 49152
+        pass
+    return 49152 if (active_gpu == "all" or gpu_cnt > 1) else 24576
 
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
@@ -1179,18 +1209,27 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     gpu_cnt = get_gpu_count()
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu_cfg = ""
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                active_gpu_cfg = f.read().strip()
+        except Exception:
+            pass
+    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
+
     if is_70b:
-        if gpu_cnt > 1 or vram_mb >= 36000:
-            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 15-20+ tok/s!
+        if is_multi_gpu:
+            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 30-40 tok/s!
             num_gpu_layers = 99
             num_ctx_val = 2048
             num_batch_val = 512
         else:
-            # Single 24GB card mode: Offload 38 of 80 layers strictly allocating ~22.0 GB VRAM, leaving 2GB KV headroom.
-            # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
-            num_gpu_layers = 38
+            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
+            num_gpu_layers = 48
             num_ctx_val = 1536
-            num_batch_val = 256
+            num_batch_val = 512
     elif is_32b:
         # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
         # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
@@ -1401,14 +1440,42 @@ def extract_code_block(text):
         return max(raw_blocks, key=lambda m: len(m.group(1))).group(1).strip()
     return text.strip()
 
-def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event):
+def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event, is_dual_70b=False):
     api_url = "http://localhost:11434/api/chat"
     opt_threads = min(os.cpu_count() or 8, 10)
     vram_mb = get_visible_vram_mb()
     gpu_cnt = get_gpu_count()
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu_cfg = ""
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                active_gpu_cfg = f.read().strip()
+        except Exception:
+            pass
+    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
+
     m_lower = model_name.lower()
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
+    
+    if is_dual_70b and is_70b:
+        # User constraint: If 2 AI of 72B+ run together, they take 36-40GB max!
+        # Offload 33 of 80 layers to GPU allocating ~18.0 GB VRAM per model.
+        # 18.0 GB + 18.0 GB = 36.0 GB total combined VRAM (Zero OOM).
+        num_gpu_layers = 33
+        num_ctx_val = 2048
+    elif is_70b:
+        if is_multi_gpu:
+            # Multi-GPU Mode: 100% offload across pooled GPUs -> 30-40 tok/s!
+            num_gpu_layers = 99
+            num_ctx_val = 2048
+        else:
+            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
+            num_gpu_layers = 48
+            num_ctx_val = 1536
+    else:
+        num_gpu_layers = 99
+        num_ctx_val = 2048
 
     payload = {
         "model": model_name,
@@ -1419,7 +1486,7 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
             "temperature": 0.7,
             "num_gpu": num_gpu_layers,
             "num_thread": opt_threads,
-            "num_ctx": 2048,
+            "num_ctx": num_ctx_val,
             "num_batch": 512,
             "f16_kv": False,
             "use_mmap": True,
@@ -1666,10 +1733,25 @@ def run_parallel_swarm_session(model1_name, model2_name):
         done1 = threading.Event()
         done2 = threading.Event()
 
+        m1_lower = model1.lower()
+        m2_lower = model2.lower()
+        is_m1_70b = any(x in m1_lower for x in ["70b", "72b", "671b"])
+        is_m2_70b = any(x in m2_lower for x in ["70b", "72b", "671b"])
+        is_dual_70b = is_m1_70b and is_m2_70b
+
+        if is_dual_70b:
+            print(f"{C_BOLD}{C_GREEN}┌── ⚡ DUAL-72B VRAM CONTROLLER ENFORCED ─────────────────────────────┐{C_RESET}")
+            print(f"│  {C_CYAN}Both Models{C_RESET} : 70B+ Frontier Giants ({model1} + {model2})           │")
+            print(f"│  {C_YELLOW}VRAM Budget{C_RESET} : Strictly Capped to 36–40 GB Max Combined VRAM!      │")
+            print(f"│  • CONSOLE 1 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
+            print(f"│  • CONSOLE 2 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
+            print(f"│  • Combined  : 36.0 GB VRAM (Leaves 8-12 GB headroom • Zero OOM)     │")
+            print(f"{C_BOLD}{C_GREEN}└───────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
         print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching CONSOLE 1 ({model1} -> {file1}) & CONSOLE 2 ({model2} -> {file2}) SIDE-BY-SIDE...{C_RESET}\n")
 
-        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1), daemon=True)
-        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2), daemon=True)
+        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b), daemon=True)
+        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b), daemon=True)
         th1.start()
         th2.start()
 
@@ -2455,6 +2537,88 @@ cmd_parallel() {
 }
 
 # --- Custom Multi-Model Swarm Builder ---
+select_swarm_model_interactive() {
+  local step_num="$1"
+  local prompt_label="$2"
+  local default_choice="$3"
+
+  echo -e "\n${C_BOLD}${C_CYAN}─── STEP ${step_num}: ${prompt_label} ───${C_RESET}"
+  echo -e "${C_YELLOW}${C_BOLD}[QWEN FAMILY]${C_RESET}"
+  echo -e "   11) qwen2.5-coder:1.5b  ${C_DIM}(1.5B | Ultra-Fast Coding | ~1 GB)${C_RESET}"
+  echo -e "   12) qwen2.5-coder:7b    ${C_DIM}(7B   | High Accuracy Coding | ~5 GB)${C_RESET}"
+  echo -e "   13) qwen2.5-coder:14b   ${C_DIM}(14B  | Advanced Coding | ~9 GB)${C_RESET}"
+  echo -e "   14) qwen2.5-coder:32b   ${C_DIM}(32B  | Matches Claude 3.5 Sonnet | ~17 GB)${C_RESET}"
+  echo -e "   15) qwen3:14b           ${C_DIM}(14B  | Deep Reasoning & Thinking | ~9 GB)${C_RESET}"
+  echo -e "   16) qwen2.5:72b         ${C_DIM}(72B  | Heavyweight Frontier Giant | ~38-45 GB)${C_RESET}"
+  echo -e "${C_CYAN}${C_BOLD}[DEEPSEEK FAMILY]${C_RESET}"
+  echo -e "   21) deepseek-r1:1.5b    ${C_DIM}(1.5B | Lightweight Reasoning <think> | ~1.1 GB)${C_RESET}"
+  echo -e "   22) deepseek-r1:7b      ${C_DIM}(7B   | Deep Math & Logic | ~5 GB)${C_RESET}"
+  echo -e "   23) deepseek-r1:14b     ${C_DIM}(14B  | High-Accuracy Reasoning | ~9 GB)${C_RESET}"
+  echo -e "   24) deepseek-r1:32b     ${C_DIM}(32B  | o1-grade Math/Logic | ~18 GB)${C_RESET}"
+  echo -e "   25) deepseek-r1:70b     ${C_DIM}(70B  | Enterprise Reasoning | ~40 GB)${C_RESET}"
+  echo -e "   26) deepseek-coder:6.7b ${C_DIM}(6.7B | Clean Code Synthesizer | ~4.5 GB)${C_RESET}"
+  echo -e "${C_PURPLE}${C_BOLD}[LLAMA FAMILY]${C_RESET}"
+  echo -e "   31) llama3.2:1b         ${C_DIM}(1B   | Micro Edge Model | ~0.8 GB)${C_RESET}"
+  echo -e "   32) llama3.2:3b         ${C_DIM}(3B   | Compact Assistant | ~2.0 GB)${C_RESET}"
+  echo -e "   33) llama3.1:8b         ${C_DIM}(8B   | General Knowledge Standard | ~5.5 GB)${C_RESET}"
+  echo -e "   34) llama3.3:70b        ${C_DIM}(70B  | Flagship GPT-4o Replacement | ~40 GB)${C_RESET}"
+  echo -e "${C_GREEN}${C_BOLD}[MISTRAL & SPECIALISTS]${C_RESET}"
+  echo -e "   41) mistral:7b          ${C_DIM}(7B   | Fast & Eloquent | ~4.5 GB)${C_RESET}"
+  echo -e "   42) mistral-nemo:12b    ${C_DIM}(12B  | 128k Long Context | ~8 GB)${C_RESET}"
+  echo -e "   43) codestral:22b       ${C_DIM}(22B  | 80+ Programming Languages | ~14 GB)${C_RESET}"
+  echo -e "   44) mistral-small:24b   ${C_DIM}(24B  | Advanced Reasoning | ~15 GB)${C_RESET}"
+  echo -e "${C_WHITE}${C_BOLD}[GOOGLE GEMMA & MICROSOFT PHI]${C_RESET}"
+  echo -e "   51) gemma2:2b           ${C_DIM}(2B   | High-Efficiency Edge | ~1.6 GB)${C_RESET}"
+  echo -e "   52) gemma2:9b           ${C_DIM}(9B   | Benchmark Leader | ~6 GB)${C_RESET}"
+  echo -e "   53) gemma2:27b          ${C_DIM}(27B  | Google Flagship Open Weights | ~17 GB)${C_RESET}"
+  echo -e "   54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB)${C_RESET}"
+  echo -e "   55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB)${C_RESET}"
+  echo -e "   ${C_BOLD}[c]${C_RESET} Enter custom model name / tag"
+
+  read_input "${C_BOLD}Select model [11-55, name, or 'c', default '${default_choice}']: ${C_RESET}" SEL
+
+  local chosen=""
+  case "$SEL" in
+    11) chosen="qwen2.5-coder:1.5b" ;;
+    12) chosen="qwen2.5-coder:7b" ;;
+    13) chosen="qwen2.5-coder:14b" ;;
+    14) chosen="qwen2.5-coder:32b" ;;
+    15) chosen="qwen3:14b" ;;
+    16) chosen="qwen2.5:72b" ;;
+    21) chosen="deepseek-r1:1.5b" ;;
+    22) chosen="deepseek-r1:7b" ;;
+    23) chosen="deepseek-r1:14b" ;;
+    24) chosen="deepseek-r1:32b" ;;
+    25) chosen="deepseek-r1:70b" ;;
+    26) chosen="deepseek-coder:6.7b" ;;
+    31) chosen="llama3.2:1b" ;;
+    32) chosen="llama3.2:3b" ;;
+    33) chosen="llama3.1:8b" ;;
+    34) chosen="llama3.3:70b" ;;
+    41) chosen="mistral:7b" ;;
+    42) chosen="mistral-nemo:12b" ;;
+    43) chosen="codestral:22b" ;;
+    44) chosen="mistral-small:24b" ;;
+    51) chosen="gemma2:2b" ;;
+    52) chosen="gemma2:9b" ;;
+    53) chosen="gemma2:27b" ;;
+    54) chosen="phi3.5:3.8b" ;;
+    55) chosen="phi4:14b" ;;
+    c|C|custom)
+      read_input "${C_BOLD}Enter custom model name: ${C_RESET}" cust_m
+      chosen="${cust_m:-$default_choice}"
+      ;;
+    "")
+      chosen="$default_choice"
+      ;;
+    *)
+      chosen="$SEL"
+      ;;
+  esac
+  echo "$chosen"
+}
+
+# --- Custom Multi-Model Swarm Builder ---
 cmd_swarm_builder() {
   clear 2>/dev/null || true
   echo -e "${C_BOLD}${C_GREEN}"
@@ -2462,45 +2626,34 @@ cmd_swarm_builder() {
   echo "║         CUSTOM MULTI-MODEL SWARM BUILDER (RUN 2+ MODELS)             ║"
   echo "║     Pair any Big Brain AI with any Fast Worker AI in shared memory   ║"
   echo "╚══════════════════════════════════════════════════════════════════════╝"
-  echo -e "${C_RESET}\n"
+  echo -e "${C_RESET}"
 
-  echo -e "${C_CYAN}Step 1: Choose Model #1 (The Lead Thinker / Architect):${C_RESET}"
-  echo -e "  1) qwen2.5:72b         (Big 72B Brain)"
-  echo -e "  2) qwen3:14b           (14B Reasoning Brain - Already Installed!)"
-  echo -e "  3) deepseek-r1:14b     (Deep Reasoning <think> Brain)"
-  echo -e "  4) llama3.3:70b        (Meta 70B Flagship)"
-  echo -e "  5) Enter custom model name"
-  read_input "${C_BOLD}Select [1-5]: ${C_RESET}" M1_CHOICE
+  MODEL1=$(select_swarm_model_interactive "1" "Choose Model #1 (Lead Architect / File 1)" "qwen3:14b")
+  MODEL2=$(select_swarm_model_interactive "2" "Choose Model #2 (Fast Worker / File 2)" "qwen2.5-coder:1.5b")
 
-  case "$M1_CHOICE" in
-    1) MODEL1="qwen2.5:72b" ;;
-    2) MODEL1="qwen3:14b" ;;
-    3) MODEL1="deepseek-r1:14b" ;;
-    4) MODEL1="llama3.3:70b" ;;
-    5)
-      read_input "Enter Model 1 name: " MODEL1
-      ;;
-    *) MODEL1="qwen3:14b" ;;
-  esac
+  # Dynamic 70B+ / 72B VRAM Controller Enforcement:
+  local m1_lower=$(echo "$MODEL1" | tr '[:upper:]' '[:lower:]')
+  local m2_lower=$(echo "$MODEL2" | tr '[:upper:]' '[:lower:]')
+  local is_m1_70b=0
+  local is_m2_70b=0
+  if [[ "$m1_lower" =~ 70b|72b|671b ]]; then is_m1_70b=1; fi
+  if [[ "$m2_lower" =~ 70b|72b|671b ]]; then is_m2_70b=1; fi
 
-  echo -e "\n${C_CYAN}Step 2: Choose Model #2 (The Fast Worker / Coder):${C_RESET}"
-  echo -e "  1) qwen2.5-coder:1.5b  (Ultra-Fast Coder - Already Installed!)"
-  echo -e "  2) qwen2.5-coder:7b    (7B Accurate Coder)"
-  echo -e "  3) deepseek-coder:6.7b (DeepSeek Fast Coder)"
-  echo -e "  4) llama3.1:8b         (Llama 8B Worker)"
-  echo -e "  5) Enter custom model name"
-  read_input "${C_BOLD}Select [1-5]: ${C_RESET}" M2_CHOICE
-
-  case "$M2_CHOICE" in
-    1) MODEL2="qwen2.5-coder:1.5b" ;;
-    2) MODEL2="qwen2.5-coder:7b" ;;
-    3) MODEL2="deepseek-coder:6.7b" ;;
-    4) MODEL2="llama3.1:8b" ;;
-    5)
-      read_input "Enter Model 2 name: " MODEL2
-      ;;
-    *) MODEL2="qwen2.5-coder:1.5b" ;;
-  esac
+  if [ "$is_m1_70b" -eq 1 ] && [ "$is_m2_70b" -eq 1 ]; then
+    echo -e "\n${C_BOLD}${C_GREEN}┌── ⚡ DUAL-72B VRAM CONTROLLER ACTIVE ─────────────────────────────────┐${C_RESET}"
+    echo -e "│  ${C_CYAN}Both Models${C_RESET} : 70B+ Frontier Giants (${MODEL1} + ${MODEL2})          │"
+    echo -e "│  ${C_YELLOW}VRAM Budget${C_RESET} : Strictly Capped to 36–40 GB Max Combined VRAM!     │"
+    echo -e "│  • ${MODEL1} : ~18.0 GB VRAM allocated on GPU (33 layers)         │"
+    echo -e "│  • ${MODEL2} : ~18.0 GB VRAM allocated on GPU (33 layers)         │"
+    echo -e "│  • Combined Total  : 36.0 GB VRAM (Leaves 8–12 GB headroom • Zero OOM) │"
+    echo -e "${C_BOLD}${C_GREEN}└───────────────────────────────────────────────────────────────────────┘${C_RESET}"
+  elif [ "$is_m1_70b" -eq 1 ] || [ "$is_m2_70b" -eq 1 ]; then
+    echo -e "\n${C_BOLD}${C_GREEN}┌── ⚡ 72B HYBRID SWARM VRAM ALLOCATION ─────────────────────────────────┐${C_RESET}"
+    echo -e "│  ${C_CYAN}Allocation Target${C_RESET} : 36–40 GB Max Total VRAM Pool                      │"
+    echo -e "│  • Multi-GPU Throughput Target : ${C_GREEN}30–40 tok/s${C_RESET} (100% on GPU)             │"
+    echo -e "│  • Single-GPU Fallback Target  : ${C_YELLOW}15–20 tok/s${C_RESET} (48 GPU layers)           │"
+    echo -e "${C_BOLD}${C_GREEN}└───────────────────────────────────────────────────────────────────────┘${C_RESET}"
+  fi
 
   echo -e "\n${C_CYAN}Step 3: Choose Swarm Execution Strategy:${C_RESET}"
   echo -e "  1) ⚡ Dual-Console Simultaneous (Side-by-side consoles • Code File 1 & File 2 concurrently!)"

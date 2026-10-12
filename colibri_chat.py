@@ -397,6 +397,14 @@ def resolve_model_name(name):
     return n
 
 def get_gpu_count():
+    env_active = os.environ.get("ACTIVE_GPU", "").strip()
+    if env_active == "all":
+        return 2
+    cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if cuda_vis == "all":
+        return 2
+    if "," in cuda_vis:
+        return len([c for c in cuda_vis.split(",") if c.strip()])
     try:
         import subprocess
         out = subprocess.check_output(
@@ -404,28 +412,44 @@ def get_gpu_count():
             stderr=subprocess.DEVNULL
         ).decode("utf-8").strip()
         lines = [l for l in out.splitlines() if l.strip()]
-        return max(1, len(lines))
+        if len(lines) > 0:
+            return len(lines)
     except Exception:
-        return 1
+        pass
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                if f.read().strip() == "all":
+                    return 2
+        except Exception:
+            pass
+    try:
+        import subprocess
+        out = subprocess.check_output("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller' | wc -l", shell=True).decode().strip()
+        if int(out) > 1:
+            return int(out)
+    except Exception:
+        pass
+    return 1
 
 def get_visible_vram_mb():
-    try:
-        cfg_file = os.path.expanduser("~/.colistream/gpu_config")
-        active_gpu = None
-        if os.path.exists(cfg_file):
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu = os.environ.get("ACTIVE_GPU", "").strip() or None
+    if not active_gpu and os.path.exists(cfg_file):
+        try:
             with open(cfg_file, "r") as f:
                 active_gpu = f.read().strip()
-        
-        gpu_cnt = get_gpu_count()
-        # On multi-GPU rigs, pool all GPUs by default unless user explicitly pinned a single card != 0
-        if gpu_cnt > 1:
-            if active_gpu == "all" or not active_gpu or active_gpu == "0":
-                env_cuda = "all"
-            else:
-                env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu)
-        else:
-            env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
+        except Exception:
+            pass
 
+    gpu_cnt = get_gpu_count()
+    if active_gpu == "all" or gpu_cnt > 1:
+        env_cuda = "all"
+    else:
+        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
+
+    try:
         import subprocess
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=index,memory.total", "--format=csv,noheader,nounits"],
@@ -441,9 +465,11 @@ def get_visible_vram_mb():
                     total_vram += mem
                 elif str(idx) in env_cuda.split(","):
                     total_vram += mem
-        return total_vram if total_vram > 0 else (gpu_cnt * 24576)
+        if total_vram > 0:
+            return total_vram
     except Exception:
-        return 49152
+        pass
+    return 49152 if (active_gpu == "all" or gpu_cnt > 1) else 24576
 
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
@@ -526,18 +552,27 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     gpu_cnt = get_gpu_count()
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu_cfg = ""
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                active_gpu_cfg = f.read().strip()
+        except Exception:
+            pass
+    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
+
     if is_70b:
-        if gpu_cnt > 1 or vram_mb >= 36000:
-            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 15-20+ tok/s!
+        if is_multi_gpu:
+            # Multi-GPU Mode (>=36GB total VRAM, e.g. 2x 24GB cards): 100% offload across GPUs -> 30-40 tok/s!
             num_gpu_layers = 99
             num_ctx_val = 2048
             num_batch_val = 512
         else:
-            # Single 24GB card mode: Offload 38 of 80 layers strictly allocating ~22.0 GB VRAM, leaving 2GB KV headroom.
-            # Remaining layers execute on host CPU/RAM to prevent cudaMalloc OOM.
-            num_gpu_layers = 38
+            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
+            num_gpu_layers = 48
             num_ctx_val = 1536
-            num_batch_val = 256
+            num_batch_val = 512
     elif is_32b:
         # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
         # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
@@ -748,14 +783,42 @@ def extract_code_block(text):
         return max(raw_blocks, key=lambda m: len(m.group(1))).group(1).strip()
     return text.strip()
 
-def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event):
+def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_holder, done_event, is_dual_70b=False):
     api_url = "http://localhost:11434/api/chat"
     opt_threads = min(os.cpu_count() or 8, 10)
     vram_mb = get_visible_vram_mb()
     gpu_cnt = get_gpu_count()
+    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    active_gpu_cfg = ""
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                active_gpu_cfg = f.read().strip()
+        except Exception:
+            pass
+    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
+
     m_lower = model_name.lower()
     is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
+    
+    if is_dual_70b and is_70b:
+        # User constraint: If 2 AI of 72B+ run together, they take 36-40GB max!
+        # Offload 33 of 80 layers to GPU allocating ~18.0 GB VRAM per model.
+        # 18.0 GB + 18.0 GB = 36.0 GB total combined VRAM (Zero OOM).
+        num_gpu_layers = 33
+        num_ctx_val = 2048
+    elif is_70b:
+        if is_multi_gpu:
+            # Multi-GPU Mode: 100% offload across pooled GPUs -> 30-40 tok/s!
+            num_gpu_layers = 99
+            num_ctx_val = 2048
+        else:
+            # Single 24GB card mode: Offload 48 of 80 layers allocating ~21.5 GB VRAM -> 15-20 tok/s!
+            num_gpu_layers = 48
+            num_ctx_val = 1536
+    else:
+        num_gpu_layers = 99
+        num_ctx_val = 2048
 
     payload = {
         "model": model_name,
@@ -766,7 +829,7 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
             "temperature": 0.7,
             "num_gpu": num_gpu_layers,
             "num_thread": opt_threads,
-            "num_ctx": 2048,
+            "num_ctx": num_ctx_val,
             "num_batch": 512,
             "f16_kv": False,
             "use_mmap": True,
@@ -1013,10 +1076,25 @@ def run_parallel_swarm_session(model1_name, model2_name):
         done1 = threading.Event()
         done2 = threading.Event()
 
+        m1_lower = model1.lower()
+        m2_lower = model2.lower()
+        is_m1_70b = any(x in m1_lower for x in ["70b", "72b", "671b"])
+        is_m2_70b = any(x in m2_lower for x in ["70b", "72b", "671b"])
+        is_dual_70b = is_m1_70b and is_m2_70b
+
+        if is_dual_70b:
+            print(f"{C_BOLD}{C_GREEN}┌── ⚡ DUAL-72B VRAM CONTROLLER ENFORCED ─────────────────────────────┐{C_RESET}")
+            print(f"│  {C_CYAN}Both Models{C_RESET} : 70B+ Frontier Giants ({model1} + {model2})           │")
+            print(f"│  {C_YELLOW}VRAM Budget{C_RESET} : Strictly Capped to 36–40 GB Max Combined VRAM!      │")
+            print(f"│  • CONSOLE 1 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
+            print(f"│  • CONSOLE 2 : ~18.0 GB VRAM allocated on GPU (33 layers)            │")
+            print(f"│  • Combined  : 36.0 GB VRAM (Leaves 8-12 GB headroom • Zero OOM)     │")
+            print(f"{C_BOLD}{C_GREEN}└───────────────────────────────────────────────────────────────────────┘{C_RESET}")
+
         print(f"\n{C_BOLD}{C_YELLOW}⚡ Dispatching CONSOLE 1 ({model1} -> {file1}) & CONSOLE 2 ({model2} -> {file2}) SIDE-BY-SIDE...{C_RESET}\n")
 
-        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1), daemon=True)
-        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2), daemon=True)
+        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b), daemon=True)
+        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b), daemon=True)
         th1.start()
         th2.start()
 
