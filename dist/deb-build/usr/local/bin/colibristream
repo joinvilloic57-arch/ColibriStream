@@ -1748,11 +1748,14 @@ EOF
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[d]${C_RESET} ${C_YELLOW}Hardware & Speed Diagnostics${C_RESET} (Inspect GPU/CPU VRAM Splits)│"
     echo -e "│      → Direct Command: ${C_CYAN}colistream diag${C_RESET}                                 │"
+    echo -e "│                                                                   │"
+    echo -e "│  ${C_BOLD}[s]${C_RESET} ${C_GREEN}🌐 Worldwide Share & Live Link${C_RESET} (Zero Passwords • Access Everywhere) │"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream share${C_RESET}                                │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-6, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1-6, g, d, s] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       1)
@@ -1784,13 +1787,16 @@ EOF
         cmd_diag
         read_input "Press Enter to return to menu: " _
         ;;
+      s|S|share|web)
+        bash "${DIR}/share.sh"
+        ;;
       q|Q|exit)
         echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
         exit 0
         ;;
       *)
         if [ -n "$CHOICE" ]; then
-          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6, g, or q.${C_RESET}"
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6, g, d, s, or q.${C_RESET}"
           sleep 1
         fi
         ;;
@@ -1812,6 +1818,9 @@ case "$1" in
   build)
     cmd_swarm_builder
     ;;
+  share|serve|web)
+    bash "${DIR}/share.sh" "$2"
+    ;;
   list|ls)
     cmd_list
     ;;
@@ -1831,6 +1840,6 @@ case "$1" in
     cmd_loop_menu
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm [m1] [m2]|debate [m1] [m2]|diag|gpu [id]|restart [id]|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|run <model>|swarm [m1] [m2]|debate [m1] [m2]|share|diag|gpu [id]|restart [id]|list|catalog]"
     ;;
 esac
