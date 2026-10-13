@@ -270,8 +270,39 @@ run_hardware_scan() {
   fi
   AVAILABLE_VRAM_GB=$((AVAILABLE_VRAM_MB / 1024))
 
-  DISK_HEADROOM=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
-  DISK_SPEED="2.3 GB/s Direct I/O"
+  # Probe real storage target where Ollama stores models
+  local model_target_dir="${OLLAMA_MODELS:-}"
+  if [ -z "$model_target_dir" ] || [ ! -d "$model_target_dir" ]; then
+    if [ -d "/mnt/storage-pool/ollama/models" ]; then
+      model_target_dir="/mnt/storage-pool/ollama/models"
+    elif [ -d "${HOME}/.ollama/models" ]; then
+      model_target_dir="${HOME}/.ollama/models"
+    elif [ -d "/usr/share/ollama/.ollama/models" ]; then
+      model_target_dir="/usr/share/ollama/.ollama/models"
+    else
+      model_target_dir="${HOME}"
+    fi
+  fi
+
+  DISK_HEADROOM=$(df -h "$model_target_dir" 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
+  local disk_dev
+  disk_dev=$(df "$model_target_dir" 2>/dev/null | awk 'NR==2 {print $1}')
+  local disk_type="Storage"
+  if [[ "$disk_dev" == *"nvme"* ]]; then
+    disk_type="NVMe PCIe SSD"
+  elif [[ "$disk_dev" == *"models-large"* ]] || [[ "$disk_dev" == *"storage-pool"* ]]; then
+    disk_type="Unified Storage Pool"
+  elif [[ "$disk_dev" == *"sd"* ]] || [[ "$disk_dev" == *"mapper"* ]]; then
+    local base_b=$(basename "$disk_dev" | tr -d '0-9')
+    if [ -f "/sys/block/${base_b}/queue/rotational" ] && [ "$(cat /sys/block/${base_b}/queue/rotational 2>/dev/null)" = "1" ]; then
+      disk_type="SATA HDD Pool"
+    else
+      disk_type="SATA/SAS SSD"
+    fi
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    disk_type="Apple APFS SSD"
+  fi
+  DISK_SUMMARY="${disk_type} (Free: ${DISK_HEADROOM} • 15GB Safety Reserve)"
 }
 
 print_telemetry_box() {
@@ -306,7 +337,7 @@ print_telemetry_box() {
     done
   fi
 
-  printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "NVMe / Storage" "${DISK_SPEED} (Free: ${DISK_HEADROOM})"
+  printf "│ %-16s : ${C_GREEN}%-47.47s${C_RESET} │\n" "Storage Device" "${DISK_SUMMARY}"
   echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}"
 }
 
@@ -1123,6 +1154,10 @@ def resolve_model_name(name):
         return catalog_map[nl]
 
     if nl in ("32b", "32", "32b-coder", "qwen-32b", "qwen2.5-32b"):
+        if sys.platform == "darwin":
+            # On Apple Silicon M-series (M1/M2/M3/M4), map 32b to fast 14.8GB Q3_K_M
+            # which fits 100% inside 16GB-24GB Unified Memory with zero swap or freeze!
+            return "qwen2.5-coder:32b-instruct-q3_K_M"
         try:
             with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as resp:
                 tags = json.loads(resp.read().decode("utf-8")).get("models", [])
@@ -1166,6 +1201,42 @@ def resolve_model_name(name):
     if nl in ("7b", "7", "qwen-7b", "coder-7b"):
         return "qwen2.5-coder:7b"
     return n
+
+def get_idle_timeout():
+    cfg = os.path.expanduser("~/.colistream/idle_config")
+    if os.path.exists(cfg):
+        try:
+            with open(cfg, "r") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+        except Exception:
+            pass
+    return "5m"
+
+def set_idle_timeout(val):
+    val = val.strip().lower()
+    if val in ("off", "never", "disable", "none", "-1"):
+        val = "never"
+    cfg = os.path.expanduser("~/.colistream/idle_config")
+    try:
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, "w") as f:
+            f.write(val)
+    except Exception:
+        pass
+    return val
+
+def unload_model_from_memory(model_name, api_base="http://localhost:11434"):
+    try:
+        url = f"{api_base}/api/generate"
+        payload = json.dumps({"model": model_name, "keep_alive": 0}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            pass
+        return True
+    except Exception:
+        return False
 
 def get_gpu_telemetry():
     """
@@ -1314,6 +1385,26 @@ def ensure_model_installed(model_name):
     except Exception:
         return False
 
+    # Check free disk space on model target partition to leave 15GB safety buffer
+    try:
+        import shutil
+        target_dir = os.environ.get("OLLAMA_MODELS")
+        if not target_dir or not os.path.exists(target_dir):
+            target_dir = os.path.expanduser("~/.ollama/models")
+            if not os.path.exists(target_dir):
+                target_dir = "/"
+        free_bytes = shutil.disk_usage(target_dir).free
+        free_gb = free_bytes / (1024 ** 3)
+        if free_gb < 15.0:
+            print(f"\n{C_RED}[!] Low Storage Alert: Only {free_gb:.1f} GB free on {target_dir}.{C_RESET}")
+            print(f"{C_YELLOW}[!] ColibriStream enforces a 15 GB safety buffer to protect system stability.{C_RESET}")
+            ans = input(f"{C_BOLD}Continue downloading '{model_name}' anyway? [y/N]: {C_RESET}").strip().lower()
+            if ans not in ("y", "yes"):
+                print(f"{C_YELLOW}[*] Download cancelled to protect disk space.{C_RESET}")
+                return False
+    except Exception:
+        pass
+
     print(f"\n{C_YELLOW}[!] Model '{model_name}' not found locally. Auto-downloading now...{C_RESET}")
     url = "http://localhost:11434/api/pull"
     req = urllib.request.Request(
@@ -1394,7 +1485,7 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
             "model": model_name,
             "messages": messages,
             "stream": True,
-            "keep_alive": "30m",
+            "keep_alive": get_idle_timeout(),
             "options": {
                 "temperature": 0.7,
                 "num_gpu": current_gpu_layers,
@@ -1448,16 +1539,18 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
                             token_count += 1
                         if chunk.get("done", False):
                             eval_count = chunk.get("eval_count", token_count)
+                            prompt_eval_count = chunk.get("prompt_eval_count", 0)
                             eval_dur = chunk.get("eval_duration", 0) / 1e9
+                            tot_dur = chunk.get("total_duration", 0) / 1e9
                             speed = eval_count / eval_dur if eval_dur > 0 else 0
-                            return "".join(full_response), speed, eval_count
+                            return "".join(full_response), speed, eval_count, prompt_eval_count, tot_dur
                     except json.JSONDecodeError:
                         pass
-                return "".join(full_response), 0, token_count
+                return "".join(full_response), 0, token_count, 0, 0.0
         except KeyboardInterrupt:
             stop_spinner.set()
             print(f"\n{C_DIM}[Generation stopped by user]{C_RESET}")
-            return "".join(full_response), 0, token_count
+            return "".join(full_response), 0, token_count, 0, 0.0
         except urllib.error.HTTPError as e:
             stop_spinner.set()
             error_msg = e.read().decode("utf-8", errors="ignore")
@@ -1680,7 +1773,7 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
                 "model": model_name,
                 "messages": messages,
                 "stream": True,
-                "keep_alive": "30m",
+                "keep_alive": get_idle_timeout(),
                 "options": {
                     "temperature": 0.7,
                     "num_gpu": current_gpu_layers,
@@ -1712,9 +1805,12 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
                             if chunk.get("done", False):
                                 eval_dur = chunk.get("eval_duration", 0) / 1e9
                                 eval_cnt = chunk.get("eval_count", stats_holder.get("tokens", 0))
+                                prompt_eval_cnt = chunk.get("prompt_eval_count", 0)
                                 if eval_dur > 0:
                                     stats_holder["speed"] = eval_cnt / eval_dur
                                 stats_holder["tokens"] = eval_cnt
+                                stats_holder["prompt_tokens"] = prompt_eval_cnt
+                                stats_holder["total_duration"] = chunk.get("total_duration", 0) / 1e9
                                 break
                         except Exception:
                             pass
@@ -2004,104 +2100,33 @@ def run_parallel_swarm_session(model1_name, model2_name):
             continue
 
         last_user_prompt = prompt
-        task_mode = classify_task_mode(prompt, assigned_targets)
-
-        # ─── CASE 1: Fast Responsive Query (Simple Questions, Chat, Quick Lookups) ───
-        if task_mode == "fast_response":
-            print(f"\n{C_CYAN}{C_BOLD}🔍 Fast Copilot ({fast_model}):{C_RESET}")
-            fast_sys = (
-                f"You are {fast_model}, an agile local AI assistant in Colibristream.\n"
-                f"Answer the user's request directly, accurately, and concisely.\n"
-                f"Do NOT invent unrelated files or source code unless specifically requested.\n"
-                f"If this task requires deep architectural computation or frontier math beyond your capability, conclude with '[NEED_ARCHITECT]'."
-            )
-            files_ctx = "\nActive Workspace Files:\n" + "\n".join(tracked_files.keys()) if tracked_files else ""
-            msgs = [{"role": "system", "content": fast_sys + files_ctx}] + list(m2_history) + [{"role": "user", "content": prompt}]
-            ans, spd, toks = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
-
-            # Check if Fast Model requested Handoff / Escalation to Lead Architect
-            if "[NEED_ARCHITECT]" in ans or "need_architect" in ans.lower():
-                clean_ans = ans.replace("[NEED_ARCHITECT]", "").strip()
-                print(f"\n\n{C_YELLOW}⚡ Copilot requested handoff: Escalating to Lead Architect ({lead_model})...{C_RESET}")
-                lead_sys = (
-                    f"You are {lead_model}, Lead Architect in Colibristream.\n"
-                    f"Your copilot ({fast_model}) requested your deep reasoning on this user request.\n"
-                    f"Provide an authoritative, in-depth solution addressing the request directly."
-                )
-                lead_msgs = [{"role": "system", "content": lead_sys}] + list(m1_history) + [
-                    {"role": "user", "content": f"{prompt}\n\n[Copilot Notes]: {clean_ans}"}
-                ]
-                print(f"{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}) [Authoritative Resolution]:{C_RESET}")
-                lead_ans, _, _ = stream_chat(lead_model, lead_msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
-                m1_history.append({"role": "user", "content": prompt})
-                m1_history.append({"role": "assistant", "content": lead_ans})
-                last_solutions["1"] = lead_ans
-                apply_model_edits(lead_ans, user_prompt=prompt)
-            else:
-                m2_history.append({"role": "user", "content": prompt})
-                m2_history.append({"role": "assistant", "content": ans})
-                last_solutions["2"] = ans
-                apply_model_edits(ans, user_prompt=prompt)
-            continue
-
-        # ─── CASE 2: Heavy Task on Big Model with Fast Copilot Assessment ───
-        if task_mode == "heavy_architect":
-            print(f"\n{C_CYAN}{C_BOLD}⚡ Fast Copilot ({fast_model}) [Initial Assessment]:{C_RESET}")
-            quick_sys = f"You are {fast_model}. Give a brief 2-sentence initial assessment of this task while Lead Architect ({lead_model}) computes the complete solution."
-            fast_brief, _, _ = stream_chat(fast_model, [{"role": "system", "content": quick_sys}, {"role": "user", "content": prompt}], color=C_CYAN, api_url=f"{api_base}/api/chat")
-
-            print(f"\n\n{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}) [Comprehensive Solution]:{C_RESET}")
-            files_ctx = build_system_prompt() if tracked_files else ""
-            ctx_inject = f"\n\n{files_ctx}" if files_ctx else ""
-            lead_sys = (
-                f"You are {lead_model}, Lead Architect in Colibristream.\n"
-                f"Provide a comprehensive, production-grade technical solution for the user's request."
-            )
-            lead_msgs = [{"role": "system", "content": lead_sys}] + list(m1_history) + [{"role": "user", "content": f"{prompt}{ctx_inject}"}]
-            lead_ans, _, _ = stream_chat(lead_model, lead_msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
-            m1_history.append({"role": "user", "content": prompt})
-            m1_history.append({"role": "assistant", "content": lead_ans})
-            last_solutions["1"] = lead_ans
-            apply_model_edits(lead_ans, user_prompt=prompt)
-            continue
-
-        # ─── CASE 3 & 4: Dual Collaborative Planning or Dual Coding ───
         f1_cand, f2_cand = detect_swarm_file_targets(prompt)
-        if task_mode == "dual_plan":
-            file1 = assigned_targets[0] or (f1_cand if f1_cand != 'core_service.rs' else 'core_engine_spec.md')
-            file2 = assigned_targets[1] or (f2_cand if f2_cand != 'worker_client.c' else 'interface_telemetry_spec.md')
-            m1_sys = (
-                f"You are Model 1 ({model1}) — Lead Engine & Systems Architect in a 2-AI collaborative swarm.\n"
-                f"You and Model 2 ({model2}) are co-authoring the project plan together in real time without duplicating work.\n\n"
-                f"YOUR EXCLUSIVE SCOPE (Low-Level Systems & Engine):\n"
-                f"- Phase 3 & Phase 4: Low-level Core Engine, Bare-Metal Runtime (Rust/C/Assembly), Memory Mapping (mmap), and the Universal Local Model Hub.\n"
-                f"- Output technical specification in markdown: ```write:{file1}\n"
-            )
-            m2_sys = (
-                f"You are Model 2 ({model2}) — Interface & Integration Architect in a 2-AI collaborative swarm.\n"
-                f"You and Model 1 ({model1}) are co-authoring the project plan together in real time without duplicating work.\n\n"
-                f"YOUR EXCLUSIVE SCOPE (Client Interface & Telemetry Scanner):\n"
-                f"- Phase 1 & Phase 2: Web Landing Page (sleek, zero bloat, dark terminal aesthetic) and CLI Transition.\n"
-                f"- Output interface specification in markdown: ```write:{file2}\n"
-            )
-            m1_user_msg = f"[COLLABORATIVE TASK: Focus on Phase 3 & 4 (Core Engine, Runtime & Model Hub Architecture)]\n\nUser Request: {prompt}"
-            m2_user_msg = f"[COLLABORATIVE TASK: Focus on Phase 1 & 2 (Web Landing Page, Terminal Interface & Hardware Scanner)]\n\nUser Request: {prompt}"
-        else: # dual_code
-            file1 = assigned_targets[0] or f1_cand
-            file2 = assigned_targets[1] or f2_cand
-            m1_sys = (
-                f"You are Model 1 ({model1}) — Lead Engine & Backend Architect in a 2-AI simultaneous coding swarm.\n"
-                f"YOUR RESPONSIBILITY: Component 1 ('{file1}'). Output code in: ```write:{file1}\n"
-            )
-            m2_sys = (
-                f"You are Model 2 ({model2}) — Client & Integration Specialist in a 2-AI simultaneous coding swarm.\n"
-                f"YOUR RESPONSIBILITY: Component 2 ('{file2}'). Output code in: ```write:{file2}\n"
-            )
-            m1_user_msg = f"[COLLABORATIVE TASK: Implement Component 1 in '{file1}']\n\nUser Request: {prompt}"
-            m2_user_msg = f"[COLLABORATIVE TASK: Implement Component 2 in '{file2}' connecting to '{file1}']\n\nUser Request: {prompt}"
+        file1 = assigned_targets[0] or f1_cand
+        file2 = assigned_targets[1] or f2_cand
 
-        m1_messages = [{"role": "system", "content": m1_sys}] + list(m1_history) + [{"role": "user", "content": m1_user_msg}]
-        m2_messages = [{"role": "system", "content": m2_sys}] + list(m2_history) + [{"role": "user", "content": m2_user_msg}]
+        # Dual AI Inter-Communication Prompts:
+        # Lead Architect focuses on System Architecture & Core Interface
+        # Fast Coder focuses on Concrete Implementation & Functional Modules
+        m1_sys = (
+            f"You are Model 1 ({model1}) — Lead Systems Architect in an autonomous 2-AI concurrent swarm.\n"
+            f"You and Model 2 ({model2}) work simultaneously side-by-side on this user request.\n"
+            f"YOUR ROLE: Provide the system architecture, foundational data structures, interfaces, and primary component ('{file1}').\n"
+            f"Output clean production-grade code: ```write:{file1}\n"
+        )
+        m2_sys = (
+            f"You are Model 2 ({model2}) — Senior Implementation Engineer in an autonomous 2-AI concurrent swarm.\n"
+            f"You and Model 1 ({model1}) work simultaneously side-by-side on this user request.\n"
+            f"YOUR ROLE: Provide working implementation logic, helper functions, client integration, and complementary component ('{file2}').\n"
+            f"Output clean production-grade code: ```write:{file2}\n"
+        )
+        files_ctx = build_system_prompt() if tracked_files else ""
+        ctx_inject = f"\n\nWorkspace Context:\n{files_ctx}" if files_ctx else ""
+        m1_messages = [{"role": "system", "content": m1_sys + ctx_inject}] + list(m1_history) + [
+            {"role": "user", "content": f"{prompt}\n[Collaborative Swarm: Focus on primary module '{file1}' while partner implements '{file2}']"}
+        ]
+        m2_messages = [{"role": "system", "content": m2_sys + ctx_inject}] + list(m2_history) + [
+            {"role": "user", "content": f"{prompt}\n[Collaborative Swarm: Focus on complementary module '{file2}' interfacing with '{file1}']"}
+        ]
 
         t1_text = [""]
         t2_text = [""]
@@ -2460,9 +2485,13 @@ def run_chat_session(model_name):
             print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Safe Partial VRAM Offload (Capped to Fit Available VRAM){C_RESET}    │")
     else:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
+    idle_val = get_idle_timeout()
+    idle_disp = f"Sleep after {idle_val} (100% RAM/VRAM freed)" if idle_val != "never" else "Disabled (Kept in memory)"
+    print(f"│  {C_YELLOW}Memory Idle :{C_RESET} {C_CYAN}{idle_disp:<47.47s}{C_RESET} │")
     print(f"├────────────────────────────────────────────────────────────────────────┤")
-    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/add <file>{C_RESET} | {C_YELLOW}/diff{C_RESET} | {C_YELLOW}/undo{C_RESET} | {C_YELLOW}!cmd{C_RESET} (Shell) | {C_YELLOW}/debate [model]{C_RESET} │")
-    print(f"│               {C_YELLOW}/files{C_RESET}      | {C_YELLOW}/help{C_RESET} | {C_YELLOW}/clear{C_RESET} | {C_YELLOW}/menu{C_RESET}        | {C_YELLOW}/exit{C_RESET}          │")
+    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/model <name>{C_RESET} | {C_YELLOW}/swarm{C_RESET}      | {C_YELLOW}/idle <time>{C_RESET} | {C_YELLOW}/sleep{C_RESET} (Free RAM)│")
+    print(f"│               {C_YELLOW}/add <file>{C_RESET}   | {C_YELLOW}/diff{C_RESET}       | {C_YELLOW}/undo{C_RESET}       | {C_YELLOW}!cmd{C_RESET} (Shell)     │")
+    print(f"│               {C_YELLOW}/files{C_RESET}        | {C_YELLOW}/menu{C_RESET}       | {C_YELLOW}/clear{C_RESET}      | {C_YELLOW}/exit{C_RESET}            │")
     print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
 
     if is_70b and vram_mb < 44000:
@@ -2528,7 +2557,45 @@ def run_chat_session(model_name):
                 print(f"{C_YELLOW}[!] No generated solution to apply yet.{C_RESET}")
             continue
 
-        if prompt.startswith("/debate") or prompt.startswith("/swarm"):
+        if prompt.startswith("/model ") or prompt.startswith("/switch ") or prompt.startswith("/m "):
+            new_m = prompt.split(maxsplit=1)[1].strip()
+            resolved_m = resolve_model_name(new_m)
+            if ensure_model_installed(resolved_m):
+                unload_model_from_memory(model_name)
+                model_name = resolved_m
+                m_lower = model_name.lower()
+                is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
+                is_70b = is_giant
+                is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+                history = [{"role": "system", "content": build_system_prompt()}]
+                print(f"{C_GREEN}✔ Switched active model to: {C_BOLD}{model_name}{C_RESET} (Old model unloaded from memory)")
+            continue
+
+        if prompt.startswith("/idle"):
+            parts = prompt.split(maxsplit=1)
+            if len(parts) > 1:
+                new_idle = set_idle_timeout(parts[1].strip())
+                print(f"{C_GREEN}✔ Memory Idle Sleep set to: {C_BOLD}{new_idle}{C_RESET} (Model will auto-unload from RAM/VRAM after inactivity)")
+            else:
+                cur_idle = get_idle_timeout()
+                print(f"{C_CYAN}Current Memory Idle Sleep: {C_BOLD}{cur_idle}{C_RESET} (Type /idle 2m, /idle 0 for instant, or /idle never)")
+            continue
+
+        if prompt in ("/sleep", "/unload", "/evict"):
+            if unload_model_from_memory(model_name):
+                print(f"{C_GREEN}✔ Model unloaded from memory. 100% of RAM and VRAM released to system!{C_RESET}")
+                print(f"{C_DIM}(Model will automatically wake up and retake memory on your next prompt){C_RESET}")
+            else:
+                print(f"{C_YELLOW}[!] Could not verify model unload.{C_RESET}")
+            continue
+
+        if prompt.startswith("/parallel") or prompt.startswith("/swarm"):
+            parts = prompt.split()
+            second_m = parts[1] if len(parts) > 1 else ("qwen2.5-coder:1.5b" if model_name != "qwen2.5-coder:1.5b" else "qwen3:14b")
+            run_parallel_swarm_session(model_name, second_m)
+            continue
+
+        if prompt.startswith("/debate"):
             parts = prompt.split()
             second_model = parts[1] if len(parts) > 1 else ("qwen2.5-coder:1.5b" if model_name != "qwen2.5-coder:1.5b" else "qwen3:14b")
             rounds_num = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 2
@@ -2577,21 +2644,18 @@ def run_chat_session(model_name):
             status_hint = f"{C_DIM}[Processing on GPU...]{C_RESET}"
 
         print("")
-        response_text, speed, tokens = stream_chat(model_name, history, color=C_CYAN)
+        response_text, speed, eval_tokens, prompt_tokens, tot_dur = stream_chat(model_name, history, color=C_CYAN)
         if response_text:
             history.append({"role": "assistant", "content": response_text})
             last_response_text = response_text
             # Autonomous Aider-style File Modification Engine
             apply_model_edits(response_text, user_prompt=prompt)
 
-        if speed > 0:
-            if speed < 0.2:
-                speed_str = f"{speed:.2f} tok/s {C_YELLOW}[!] Critically slow: GPU bottleneck or running on secondary slow card / CPU swap{C_RESET}"
-            else:
-                speed_str = f"{speed:.1f} tok/s"
-        else:
-            speed_str = ""
-        print(f"\n{C_DIM}└─ [{tokens} tokens {speed_str}]{C_RESET}")
+        tot_tokens = eval_tokens + prompt_tokens
+        speed_str = f"• {speed:.1f} tok/s" if speed > 0 else ""
+        dur_str = f"• {tot_dur:.1f}s" if tot_dur > 0 else ""
+        p_str = f"Prompt: {prompt_tokens} | " if prompt_tokens > 0 else ""
+        print(f"\n{C_DIM}└─ [Output: {eval_tokens} toks | {p_str}Total: {tot_tokens} {speed_str} {dur_str}]{C_RESET}")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] in ("--swarm", "--debate", "swarm", "debate"):
@@ -2606,7 +2670,6 @@ if __name__ == "__main__":
     else:
         model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
         run_chat_session(model)
-
 PYEOF
   chmod +x "$target" 2>/dev/null || true
 }
@@ -3285,17 +3348,11 @@ EOF
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[d]${C_RESET} ${C_YELLOW}Hardware & Speed Diagnostics${C_RESET} (Inspect GPU/CPU VRAM Splits)│"
     echo -e "│      → Direct Command: ${C_CYAN}colistream diag${C_RESET}                                 │"
-    echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[t]${C_RESET} ${C_YELLOW}⚡ Turbo Acceleration & Clock Boost${C_RESET} (Lock Clocks • Quantize KV)  │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream turbo${C_RESET}                                │"
-    echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[s]${C_RESET} ${C_GREEN}🌐 Worldwide Share & Live Link${C_RESET} (Zero Passwords • Access Everywhere) │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream share${C_RESET}                                │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-6, g, d, t, s] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1-6, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       mod\ *|mode\ *|model\ *|models\ *|run\ *)
@@ -3430,11 +3487,11 @@ case "$1" in
   diag|doctor)
     cmd_diag
     ;;
-  restart|rebind|reset)
-    cmd_restart_engine "$2"
-    ;;
-  menu|"")
+  menu)
     cmd_loop_menu
+    ;;
+  chat|"")
+    cmd_run "32b"
     ;;
   *)
     echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|models|run <model>|parallel [m1] [m2]|swarm [m1] [m2]|debate [m1] [m2]|share|diag|turbo|gpu [id]|restart [id]|list|catalog]"
