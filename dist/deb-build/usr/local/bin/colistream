@@ -42,7 +42,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 read_input() {
   local prompt="$1"
   local __var="$2"
-  echo -ne "$prompt"
+  echo -ne "$prompt" >&2
   if [ -e /dev/tty ]; then
     read -r "$__var" </dev/tty
   else
@@ -1069,9 +1069,59 @@ C_WHITE = "\033[38;5;255m"
 
 def resolve_model_name(name):
     if not name:
-        return "qwen2.5-coder:1.5b"
-    n = name.strip()
+        return "qwen3:14b"
+    n = str(name).strip()
+    # Strip common command prefixes like "mod ", "mode ", "model ", "models ", "m ", "/run "
+    for pfx in ("mod ", "mode ", "model ", "models ", "m ", "/run "):
+        if n.lower().startswith(pfx):
+            n = n[len(pfx):].strip()
+            break
     nl = n.lower()
+
+    # Universal Catalog Number Mappings
+    catalog_map = {
+        # Single-digit family mappings
+        "1": "qwen3:14b",
+        "2": "deepseek-r1:14b",
+        "3": "llama3.1:8b",
+        "4": "mistral:7b",
+        "5": "gemma2:9b",
+        "6": "qwen2.5:72b",
+        # Sub-indices from 11 to 65
+        "11": "qwen2.5-coder:1.5b",
+        "12": "qwen2.5-coder:7b",
+        "13": "qwen2.5-coder:14b",
+        "14": "qwen2.5-coder:32b-instruct-q3_K_M",
+        "15": "qwen3:14b",
+        "16": "qwen2.5:72b",
+        "21": "deepseek-r1:1.5b",
+        "22": "deepseek-r1:7b",
+        "23": "deepseek-r1:14b",
+        "24": "deepseek-r1:32b",
+        "25": "deepseek-r1:70b",
+        "26": "deepseek-coder:6.7b",
+        "31": "llama3.2:1b",
+        "32": "llama3.2:3b",
+        "33": "llama3.1:8b",
+        "34": "llama3.3:70b",
+        "41": "mistral:7b",
+        "42": "mistral-nemo:12b",
+        "43": "codestral:22b",
+        "44": "mistral-small:24b",
+        "51": "gemma2:2b",
+        "52": "gemma2:9b",
+        "53": "gemma2:27b",
+        "54": "phi3.5:3.8b",
+        "55": "phi4:14b",
+        "61": "deepseek-r1:671b",
+        "62": "mixtral:8x22b",
+        "63": "command-r-plus:104b",
+        "64": "deepseek-r1:671b",
+        "65": "qwen2.5:72b",
+    }
+    if nl in catalog_map:
+        return catalog_map[nl]
+
     if nl in ("32b", "32", "32b-coder", "qwen-32b", "qwen2.5-32b"):
         try:
             with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as resp:
@@ -1095,7 +1145,8 @@ def resolve_model_name(name):
             pass
         return "qwen2.5:72b-instruct-q3_K_M"
     if nl in ("500b", "500b25b", "501b", "beam", "beam:500b", "beam:500b-25b", "reflection:500b"):
-        return "beam:500b-25b"
+        # Largest flagship MoE available on Ollama library (671B total / 37B active)
+        return "deepseek-r1:671b"
     if nl in ("8x22b", "mixtral:8x22b", "141b", "mixtral-8x22b", "mixtral"):
         return "mixtral:8x22b"
     if nl in ("104b", "command-r-plus", "command-r-plus:104b", "command-r+", "commandr+"):
@@ -1106,11 +1157,13 @@ def resolve_model_name(name):
         return "deepseek-r1:70b"
     if nl in ("llama-70b", "llama3.3:70b", "llama3.3-70b"):
         return "llama3.3:70b"
-    if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
+    if nl in ("llama", "llama3", "llama3.1", "llama-8b", "8b"):
+        return "llama3.1:8b"
+    if nl in ("14b", "14", "qwen", "qwen-14b", "qwen3", "qwen3-14b"):
         return "qwen3:14b"
-    if nl in ("1.5b", "1.5", "qwen-1.5b"):
+    if nl in ("1.5b", "1.5", "qwen-1.5b", "coder"):
         return "qwen2.5-coder:1.5b"
-    if nl in ("7b", "7", "qwen-7b"):
+    if nl in ("7b", "7", "qwen-7b", "coder-7b"):
         return "qwen2.5-coder:7b"
     return n
 
@@ -1313,7 +1366,7 @@ def ensure_model_installed(model_name):
                     return True
     except KeyboardInterrupt:
         print(f"\n{C_YELLOW}[!] Download cancelled by user.{C_RESET}")
-        sys.exit(130)
+        return False
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Download warning: {e}{C_RESET}")
         return False
@@ -1763,8 +1816,14 @@ def ensure_parallel_backend(model1, model2):
 def run_parallel_swarm_session(model1_name, model2_name):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
-    ensure_model_installed(model1)
-    ensure_model_installed(model2)
+    if not ensure_model_installed(model1):
+        print(f"\n{C_YELLOW}[!] Falling back model 1 to local 'qwen3:14b'{C_RESET}")
+        model1 = "qwen3:14b"
+        ensure_model_installed(model1)
+    if not ensure_model_installed(model2):
+        print(f"\n{C_YELLOW}[!] Falling back model 2 to local 'qwen2.5-coder:1.5b'{C_RESET}")
+        model2 = "qwen2.5-coder:1.5b"
+        ensure_model_installed(model2)
 
     api_base = ensure_parallel_backend(model1, model2)
 
@@ -2149,8 +2208,14 @@ def run_parallel_swarm_session(model1_name, model2_name):
 def run_swarm_debate_session(model1_name, model2_name, rounds=2):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
-    ensure_model_installed(model1)
-    ensure_model_installed(model2)
+    if not ensure_model_installed(model1):
+        print(f"\n{C_YELLOW}[!] Falling back model 1 to local 'qwen3:14b'{C_RESET}")
+        model1 = "qwen3:14b"
+        ensure_model_installed(model1)
+    if not ensure_model_installed(model2):
+        print(f"\n{C_YELLOW}[!] Falling back model 2 to local 'qwen2.5-coder:1.5b'{C_RESET}")
+        model2 = "qwen2.5-coder:1.5b"
+        ensure_model_installed(model2)
 
     os.system("clear 2>/dev/null || true")
     print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
@@ -2365,10 +2430,17 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
 
 def run_chat_session(model_name):
     model_name = resolve_model_name(model_name)
-    ensure_model_installed(model_name)
+    ok = ensure_model_installed(model_name)
+    if not ok:
+        print(f"\n{C_YELLOW}[!] Model '{model_name}' could not be loaded or download was cancelled.{C_RESET}")
+        print(f"{C_GREEN}[*] Falling back to installed flagship model: qwen3:14b{C_RESET}")
+        time.sleep(1)
+        model_name = "qwen3:14b"
+        ensure_model_installed(model_name)
     os.system("clear 2>/dev/null || true")
     m_lower = model_name.lower()
     is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
+    is_70b = is_giant
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
@@ -2534,23 +2606,36 @@ if __name__ == "__main__":
     else:
         model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
         run_chat_session(model)
+
 PYEOF
   chmod +x "$target" 2>/dev/null || true
 }
 
 cmd_run() {
   ensure_backend
-  local model="$1"
-  if [ -z "$model" ]; then
-    model="qwen2.5-coder:1.5b"
-  fi
+  local raw_model="${1:-qwen3:14b}"
+
+  # Strip common prefix keywords
+  local model=$(echo "$raw_model" | sed -E 's/^(mod|mode|model|models|m)[[:space:]]*//I')
 
   # Intelligent Model Alias Resolution & Precision VRAM Targeting:
   case "$model" in
-    32b|32B)
+    1|15|qwen|qwen3|14b|14B)
+      model="qwen3:14b"
+      ;;
+    11|1.5b|1.5B|coder)
+      model="qwen2.5-coder:1.5b"
+      ;;
+    12|7b|7B)
+      model="qwen2.5-coder:7b"
+      ;;
+    13)
+      model="qwen2.5-coder:14b"
+      ;;
+    14|32b|32B|qwen2.5-coder:32b|qwen2.5:32b)
       model="qwen2.5-coder:32b-instruct-q3_K_M"
       ;;
-    72b|72B|qwen2.5:72b|qwen-72b)
+    16|72b|72B|qwen2.5:72b|qwen-72b|65)
       local has_q3_72b
       has_q3_72b=$(python3 -c "
 import urllib.request, json
@@ -2574,39 +2659,43 @@ except:
         model="qwen2.5:72b-instruct-q3_K_M"
       fi
       ;;
-    14b|14B)
-      model="qwen3:14b"
+    2|23|deepseek|deepseek-r1:14b)
+      model="deepseek-r1:14b"
       ;;
-    1.5b|1.5B)
-      model="qwen2.5-coder:1.5b"
+    21) model="deepseek-r1:1.5b" ;;
+    22) model="deepseek-r1:7b" ;;
+    24) model="deepseek-r1:32b" ;;
+    25) model="deepseek-r1:70b" ;;
+    26) model="deepseek-coder:6.7b" ;;
+    3|33|llama|llama3|llama3.1|llama-8b|8b)
+      model="llama3.1:8b"
       ;;
-    500b|500b25b|501b|beam|beam:500b*)
-      model="beam:500b-25b"
+    31) model="llama3.2:1b" ;;
+    32) model="llama3.2:3b" ;;
+    34|llama-70b|llama3.3:70b)
+      model="llama3.3:70b"
       ;;
-    8x22b|mixtral:8x22b|141b)
-      model="mixtral:8x22b"
+    4|41|mistral)
+      model="mistral:7b"
       ;;
-    104b|command-r-plus|command-r-plus:104b)
-      model="command-r-plus:104b"
+    42) model="mistral-nemo:12b" ;;
+    43) model="codestral:22b" ;;
+    44) model="mistral-small:24b" ;;
+    5|52|gemma|gemma2)
+      model="gemma2:9b"
       ;;
-    671b|deepseek-671b|deepseek-r1:671b)
+    51) model="gemma2:2b" ;;
+    53) model="gemma2:27b" ;;
+    54) model="phi3.5:3.8b" ;;
+    55) model="phi4:14b" ;;
+    6|61|64|500b|500b25b|501b|beam|beam:500b*|671b|deepseek-671b|deepseek-r1:671b)
       model="deepseek-r1:671b"
       ;;
-    qwen2.5-coder:32b|qwen2.5:32b)
-      # If user typed standard 32b, check if already present on disk; if not present, use q3_K_M (strictly ~17 GB VRAM, 0 RAM, 0 CPU)
-      local is_any_32b
-      is_any_32b=$(python3 -c "
-import urllib.request, json
-try:
-    with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2) as resp:
-        names = [m.get('name', '') for m in json.loads(resp.read().decode()).get('models', [])]
-        print('1' if any('32b' in n for n in names) else '0')
-except:
-    print('0')
-" 2>/dev/null || echo "0")
-      if [ "$is_any_32b" != "1" ]; then
-        model="qwen2.5-coder:32b-instruct-q3_K_M"
-      fi
+    62|8x22b|mixtral:8x22b|141b)
+      model="mixtral:8x22b"
+      ;;
+    63|104b|command-r-plus|command-r-plus:104b)
+      model="command-r-plus:104b"
       ;;
   esac
 
@@ -2683,8 +2772,23 @@ except Exception:
 " "$model" 2>/dev/null || echo "0")
 
   if [ "$is_installed" != "1" ]; then
-    echo -e "\n${C_YELLOW}[!] Model '${model}' not found locally on disk. Auto-downloading now...${C_RESET}"
-    cmd_pull "$model" || return 1
+    echo -e "\n${C_YELLOW}[!] Model '${model}' is not installed locally.${C_RESET}"
+    if ! cmd_pull "$model"; then
+      echo -e "\n${C_RED}[!] Could not download model '${model}'.${C_RESET}"
+      echo -e "${C_YELLOW}Available locally installed models on disk:${C_RESET}"
+      echo -e "  • ${C_GREEN}qwen3:14b${C_RESET} (14B Reasoning & General)"
+      echo -e "  • ${C_GREEN}qwen2.5-coder:32b-instruct-q3_K_M${C_RESET} (32B Flagship Coder)"
+      echo -e "  • ${C_GREEN}qwen2.5-coder:7b${C_RESET} (7B Fast Coder)"
+      echo -e "  • ${C_GREEN}qwen2.5-coder:1.5b${C_RESET} (1.5B Edge Coder)"
+      read_input "\n${C_BOLD}Press Enter to launch 'qwen3:14b' or type another model name (or 'b' for menu): ${C_RESET}" FALLBACK_CHOICE
+      if [ "$FALLBACK_CHOICE" = "b" ] || [ "$FALLBACK_CHOICE" = "B" ]; then
+        return 0
+      elif [ -n "$FALLBACK_CHOICE" ]; then
+        model="$FALLBACK_CHOICE"
+      else
+        model="qwen3:14b"
+      fi
+    fi
   fi
 
   local chat_script="${DIR}/colibri_chat.py"
@@ -2701,12 +2805,18 @@ except Exception:
   else
     echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
   fi
+  local exit_code=0
   if [ -e /dev/tty ]; then
     python3 "$chat_script" "$model" </dev/tty
+    exit_code=$?
   else
     python3 "$chat_script" "$model"
+    exit_code=$?
   fi
-  cmd_loop_menu
+  if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 130 ] && [ "$exit_code" -ne 42 ]; then
+    echo -e "\n${C_YELLOW}[!] Session closed with status code ${exit_code}.${C_RESET}"
+    read_input "${C_BOLD}Press Enter to return to menu: ${C_RESET}" _
+  fi
 }
 
 cmd_swarm() {
@@ -2815,77 +2925,78 @@ select_swarm_model_interactive() {
   local prompt_label="$2"
   local default_choice="$3"
 
-  echo -e "\n${C_BOLD}${C_CYAN}─── STEP ${step_num}: ${prompt_label} ───${C_RESET}"
-  echo -e "${C_YELLOW}${C_BOLD}[QWEN FAMILY]${C_RESET}"
-  echo -e "   11) qwen2.5-coder:1.5b  ${C_DIM}(1.5B | Ultra-Fast Coding | ~1 GB)${C_RESET}"
-  echo -e "   12) qwen2.5-coder:7b    ${C_DIM}(7B   | High Accuracy Coding | ~5 GB)${C_RESET}"
-  echo -e "   13) qwen2.5-coder:14b   ${C_DIM}(14B  | Advanced Coding | ~9 GB)${C_RESET}"
-  echo -e "   14) qwen2.5-coder:32b   ${C_DIM}(32B  | Matches Claude 3.5 Sonnet | ~17 GB)${C_RESET}"
-  echo -e "   15) qwen3:14b           ${C_DIM}(14B  | Deep Reasoning & Thinking | ~9 GB)${C_RESET}"
-  echo -e "   16) qwen2.5:72b         ${C_DIM}(72B  | Heavyweight Frontier Giant | ~38-45 GB)${C_RESET}"
-  echo -e "${C_CYAN}${C_BOLD}[DEEPSEEK FAMILY]${C_RESET}"
-  echo -e "   21) deepseek-r1:1.5b    ${C_DIM}(1.5B | Lightweight Reasoning <think> | ~1.1 GB)${C_RESET}"
-  echo -e "   22) deepseek-r1:7b      ${C_DIM}(7B   | Deep Math & Logic | ~5 GB)${C_RESET}"
-  echo -e "   23) deepseek-r1:14b     ${C_DIM}(14B  | High-Accuracy Reasoning | ~9 GB)${C_RESET}"
-  echo -e "   24) deepseek-r1:32b     ${C_DIM}(32B  | o1-grade Math/Logic | ~18 GB)${C_RESET}"
-  echo -e "   25) deepseek-r1:70b     ${C_DIM}(70B  | Enterprise Reasoning | ~40 GB)${C_RESET}"
-  echo -e "   26) deepseek-coder:6.7b ${C_DIM}(6.7B | Clean Code Synthesizer | ~4.5 GB)${C_RESET}"
-  echo -e "${C_PURPLE}${C_BOLD}[LLAMA FAMILY]${C_RESET}"
-  echo -e "   31) llama3.2:1b         ${C_DIM}(1B   | Micro Edge Model | ~0.8 GB)${C_RESET}"
-  echo -e "   32) llama3.2:3b         ${C_DIM}(3B   | Compact Assistant | ~2.0 GB)${C_RESET}"
-  echo -e "   33) llama3.1:8b         ${C_DIM}(8B   | General Knowledge Standard | ~5.5 GB)${C_RESET}"
-  echo -e "   34) llama3.3:70b        ${C_DIM}(70B  | Flagship GPT-4o Replacement | ~40 GB)${C_RESET}"
-  echo -e "${C_GREEN}${C_BOLD}[MISTRAL & SPECIALISTS]${C_RESET}"
-  echo -e "   41) mistral:7b          ${C_DIM}(7B   | Fast & Eloquent | ~4.5 GB)${C_RESET}"
-  echo -e "   42) mistral-nemo:12b    ${C_DIM}(12B  | 128k Long Context | ~8 GB)${C_RESET}"
-  echo -e "   43) codestral:22b       ${C_DIM}(22B  | 80+ Programming Languages | ~14 GB)${C_RESET}"
-  echo -e "   44) mistral-small:24b   ${C_DIM}(24B  | Advanced Reasoning | ~15 GB)${C_RESET}"
-  echo -e "${C_WHITE}${C_BOLD}[GOOGLE GEMMA & MICROSOFT PHI]${C_RESET}"
-  echo -e "   51) gemma2:2b           ${C_DIM}(2B   | High-Efficiency Edge | ~1.6 GB)${C_RESET}"
-  echo -e "   52) gemma2:9b           ${C_DIM}(9B   | Benchmark Leader | ~6 GB)${C_RESET}"
-  echo -e "   53) gemma2:27b          ${C_DIM}(27B  | Google Flagship Open Weights | ~17 GB)${C_RESET}"
-  echo -e "   54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB)${C_RESET}"
-  echo -e "   55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB)${C_RESET}"
-  echo -e "${C_RED}${C_BOLD}[MEGA FRONTIER & MoE (Bigger than 72B • Max 48GB Budget)]${C_RESET}"
-  echo -e "   61) beam:500b-25b       ${C_DIM}(501B MoE / 25B Active | Reflection Beam Frontier | ~44 GB)${C_RESET}"
-  echo -e "   62) mixtral:8x22b       ${C_DIM}(141B MoE / 39B Active | Mistral AI Mega-MoE | ~42 GB)${C_RESET}"
-  echo -e "   63) command-r-plus:104b ${C_DIM}(104B Dense            | Cohere Enterprise Giant | ~40 GB)${C_RESET}"
-  echo -e "   64) deepseek-r1:671b    ${C_DIM}(671B MoE / 37B Active | Low-Bit Quantized Reasoning | ~46 GB)${C_RESET}"
-  echo -e "   ${C_BOLD}[c]${C_RESET} Enter custom model name / tag"
+  echo -e "\n${C_BOLD}${C_CYAN}─── STEP ${step_num}: ${prompt_label} ───${C_RESET}" >&2
+  echo -e "${C_YELLOW}${C_BOLD}[QWEN FAMILY]${C_RESET}" >&2
+  echo -e "   11) qwen2.5-coder:1.5b  ${C_DIM}(1.5B | Ultra-Fast Coding | ~1 GB)${C_RESET}" >&2
+  echo -e "   12) qwen2.5-coder:7b    ${C_DIM}(7B   | High Accuracy Coding | ~5 GB)${C_RESET}" >&2
+  echo -e "   13) qwen2.5-coder:14b   ${C_DIM}(14B  | Advanced Coding | ~9 GB)${C_RESET}" >&2
+  echo -e "   14) qwen2.5-coder:32b   ${C_DIM}(32B  | Matches Claude 3.5 Sonnet | ~17 GB)${C_RESET}" >&2
+  echo -e "   15) qwen3:14b           ${C_DIM}(14B  | Deep Reasoning & Thinking | ~9 GB)${C_RESET}" >&2
+  echo -e "   16) qwen2.5:72b         ${C_DIM}(72B  | Heavyweight Frontier Giant | ~38-45 GB)${C_RESET}" >&2
+  echo -e "${C_CYAN}${C_BOLD}[DEEPSEEK FAMILY]${C_RESET}" >&2
+  echo -e "   21) deepseek-r1:1.5b    ${C_DIM}(1.5B | Lightweight Reasoning <think> | ~1.1 GB)${C_RESET}" >&2
+  echo -e "   22) deepseek-r1:7b      ${C_DIM}(7B   | Deep Math & Logic | ~5 GB)${C_RESET}" >&2
+  echo -e "   23) deepseek-r1:14b     ${C_DIM}(14B  | High-Accuracy Reasoning | ~9 GB)${C_RESET}" >&2
+  echo -e "   24) deepseek-r1:32b     ${C_DIM}(32B  | o1-grade Math/Logic | ~18 GB)${C_RESET}" >&2
+  echo -e "   25) deepseek-r1:70b     ${C_DIM}(70B  | Enterprise Reasoning | ~40 GB)${C_RESET}" >&2
+  echo -e "   26) deepseek-coder:6.7b ${C_DIM}(6.7B | Clean Code Synthesizer | ~4.5 GB)${C_RESET}" >&2
+  echo -e "${C_PURPLE}${C_BOLD}[LLAMA FAMILY]${C_RESET}" >&2
+  echo -e "   31) llama3.2:1b         ${C_DIM}(1B   | Micro Edge Model | ~0.8 GB)${C_RESET}" >&2
+  echo -e "   32) llama3.2:3b         ${C_DIM}(3B   | Compact Assistant | ~2.0 GB)${C_RESET}" >&2
+  echo -e "   33) llama3.1:8b         ${C_DIM}(8B   | General Knowledge Standard | ~5.5 GB)${C_RESET}" >&2
+  echo -e "   34) llama3.3:70b        ${C_DIM}(70B  | Flagship GPT-4o Replacement | ~40 GB)${C_RESET}" >&2
+  echo -e "${C_GREEN}${C_BOLD}[MISTRAL & SPECIALISTS]${C_RESET}" >&2
+  echo -e "   41) mistral:7b          ${C_DIM}(7B   | Fast & Eloquent | ~4.5 GB)${C_RESET}" >&2
+  echo -e "   42) mistral-nemo:12b    ${C_DIM}(12B  | 128k Long Context | ~8 GB)${C_RESET}" >&2
+  echo -e "   43) codestral:22b       ${C_DIM}(22B  | 80+ Programming Languages | ~14 GB)${C_RESET}" >&2
+  echo -e "   44) mistral-small:24b   ${C_DIM}(24B  | Advanced Reasoning | ~15 GB)${C_RESET}" >&2
+  echo -e "${C_WHITE}${C_BOLD}[GOOGLE GEMMA & MICROSOFT PHI]${C_RESET}" >&2
+  echo -e "   51) gemma2:2b           ${C_DIM}(2B   | High-Efficiency Edge | ~1.6 GB)${C_RESET}" >&2
+  echo -e "   52) gemma2:9b           ${C_DIM}(9B   | Benchmark Leader | ~6 GB)${C_RESET}" >&2
+  echo -e "   53) gemma2:27b          ${C_DIM}(27B  | Google Flagship Open Weights | ~17 GB)${C_RESET}" >&2
+  echo -e "   54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB)${C_RESET}" >&2
+  echo -e "   55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB)${C_RESET}" >&2
+  echo -e "${C_RED}${C_BOLD}[MEGA FRONTIER & MoE (Bigger than 72B • Max 48GB Budget)]${C_RESET}" >&2
+  echo -e "   61) deepseek-r1:671b    ${C_DIM}(671B MoE / 37B Active | Low-Bit Quantized Reasoning | ~46 GB)${C_RESET}" >&2
+  echo -e "   62) mixtral:8x22b       ${C_DIM}(141B MoE / 39B Active | Mistral AI Mega-MoE | ~42 GB)${C_RESET}" >&2
+  echo -e "   63) command-r-plus:104b ${C_DIM}(104B Dense            | Cohere Enterprise Giant | ~40 GB)${C_RESET}" >&2
+  echo -e "   64) deepseek-r1:671b    ${C_DIM}(671B MoE / 37B Active | Low-Bit Quantized Reasoning | ~46 GB)${C_RESET}" >&2
+  echo -e "   65) qwen2.5:72b         ${C_DIM}(72B Dense             | Flagship Frontier Giant | ~38–42 GB)${C_RESET}" >&2
+  echo -e "   ${C_BOLD}[c]${C_RESET} Enter custom model name / tag" >&2
 
-  read_input "${C_BOLD}Select model [11-64, name, or 'c', default '${default_choice}']: ${C_RESET}" SEL
+  read_input "${C_BOLD}Select model [11-65, name, or 'c', default '${default_choice}']: ${C_RESET}" SEL
 
   local chosen=""
   case "$SEL" in
     11) chosen="qwen2.5-coder:1.5b" ;;
     12) chosen="qwen2.5-coder:7b" ;;
     13) chosen="qwen2.5-coder:14b" ;;
-    14) chosen="qwen2.5-coder:32b" ;;
-    15) chosen="qwen3:14b" ;;
+    14) chosen="qwen2.5-coder:32b-instruct-q3_K_M" ;;
+    15|1) chosen="qwen3:14b" ;;
     16) chosen="qwen2.5:72b" ;;
     21) chosen="deepseek-r1:1.5b" ;;
     22) chosen="deepseek-r1:7b" ;;
-    23) chosen="deepseek-r1:14b" ;;
+    23|2) chosen="deepseek-r1:14b" ;;
     24) chosen="deepseek-r1:32b" ;;
     25) chosen="deepseek-r1:70b" ;;
     26) chosen="deepseek-coder:6.7b" ;;
     31) chosen="llama3.2:1b" ;;
     32) chosen="llama3.2:3b" ;;
-    33) chosen="llama3.1:8b" ;;
+    33|3) chosen="llama3.1:8b" ;;
     34) chosen="llama3.3:70b" ;;
-    41) chosen="mistral:7b" ;;
+    41|4) chosen="mistral:7b" ;;
     42) chosen="mistral-nemo:12b" ;;
     43) chosen="codestral:22b" ;;
     44) chosen="mistral-small:24b" ;;
     51) chosen="gemma2:2b" ;;
-    52) chosen="gemma2:9b" ;;
+    52|5) chosen="gemma2:9b" ;;
     53) chosen="gemma2:27b" ;;
     54) chosen="phi3.5:3.8b" ;;
     55) chosen="phi4:14b" ;;
-    61) chosen="beam:500b-25b" ;;
+    61|64|6|500b*) chosen="deepseek-r1:671b" ;;
     62) chosen="mixtral:8x22b" ;;
     63) chosen="command-r-plus:104b" ;;
-    64) chosen="deepseek-r1:671b" ;;
+    65) chosen="qwen2.5:72b" ;;
     c|C|custom)
       read_input "${C_BOLD}Enter custom model name: ${C_RESET}" cust_m
       chosen="${cust_m:-$default_choice}"
@@ -3072,12 +3183,20 @@ cmd_big_catalog() {
       exit 0
     fi
 
+    local clean_sub=$(echo "$SUB_CHOICE" | sed -E 's/^(mod|mode|model|models|m)[[:space:]]*//I')
+
     TARGET_MODEL=""
-    case "$SUB_CHOICE" in
+    case "$clean_sub" in
+      1) TARGET_MODEL="qwen3:14b" ;;
+      2) TARGET_MODEL="deepseek-r1:14b" ;;
+      3) TARGET_MODEL="llama3.1:8b" ;;
+      4) TARGET_MODEL="mistral:7b" ;;
+      5) TARGET_MODEL="gemma2:9b" ;;
+      6) TARGET_MODEL="qwen2.5:72b" ;;
       11) TARGET_MODEL="qwen2.5-coder:1.5b" ;;
       12) TARGET_MODEL="qwen2.5-coder:7b" ;;
       13) TARGET_MODEL="qwen2.5-coder:14b" ;;
-      14) TARGET_MODEL="qwen2.5-coder:32b" ;;
+      14) TARGET_MODEL="qwen2.5-coder:32b-instruct-q3_K_M" ;;
       15) TARGET_MODEL="qwen3:14b" ;;
       16) TARGET_MODEL="qwen2.5:72b" ;;
       21) TARGET_MODEL="deepseek-r1:1.5b" ;;
@@ -3099,14 +3218,13 @@ cmd_big_catalog() {
       53) TARGET_MODEL="gemma2:27b" ;;
       54) TARGET_MODEL="phi3.5:3.8b" ;;
       55) TARGET_MODEL="phi4:14b" ;;
-      61) TARGET_MODEL="beam:500b-25b" ;;
+      61|64|500b*) TARGET_MODEL="deepseek-r1:671b" ;;
       62) TARGET_MODEL="mixtral:8x22b" ;;
       63) TARGET_MODEL="command-r-plus:104b" ;;
-      64) TARGET_MODEL="deepseek-r1:671b" ;;
       65) TARGET_MODEL="qwen2.5:72b" ;;
       *)
-        if [ -n "$SUB_CHOICE" ]; then
-          TARGET_MODEL="$SUB_CHOICE"
+        if [ -n "$clean_sub" ]; then
+          TARGET_MODEL="$clean_sub"
         else
           continue
         fi
@@ -3180,6 +3298,13 @@ EOF
     read_input "${C_BOLD}Choose an option [1-6, g, d, t, s] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
+      mod\ *|mode\ *|model\ *|models\ *|run\ *)
+        local m_arg=$(echo "$CHOICE" | sed -E 's/^(mod|mode|model|models|run)[[:space:]]+//I')
+        cmd_run "$m_arg"
+        ;;
+      mod|mods|models|model|catalog)
+        cmd_big_catalog
+        ;;
       1)
         echo -e "\n${C_CYAN}[*] Launching Flagship 32B AI (100% GPU VRAM, 0 RAM, 0 CPU)...${C_RESET}"
         cmd_run "32b"
@@ -3189,24 +3314,34 @@ EOF
         cmd_parallel "qwen3:14b" "qwen2.5-coder:1.5b"
         ;;
       3)
-        echo -e "\n${C_CYAN}[*] Launching DeepSeek MoE Swarm...${C_RESET}"
-        cmd_parallel "deepseek-r1:14b" "deepseek-coder:6.7b"
+        echo -e "\n${C_BOLD}${C_CYAN}─── [3] DUAL-AI SWARM & REASONING PAIR ───${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} ${C_BOLD}Qwen MoE Swarm${C_RESET} (qwen3:14b + qwen2.5-coder:7b) [✔ Installed Locally - Instant Boot]"
+        echo -e "  ${C_GREEN}2)${C_RESET} ${C_BOLD}DeepSeek MoE Swarm${C_RESET} (deepseek-r1:14b + deepseek-coder:6.7b) [Requires Download ~13.5GB]"
+        read_input "${C_BOLD}Select Swarm [1-2, default 1]: ${C_RESET}" SW_3_OPT
+        case "$SW_3_OPT" in
+          2|deepseek*)
+            cmd_parallel "deepseek-r1:14b" "deepseek-coder:6.7b"
+            ;;
+          *)
+            cmd_parallel "qwen3:14b" "qwen2.5-coder:7b"
+            ;;
+        esac
         ;;
       4)
         echo -e "\n${C_BOLD}${C_RED}┌── MEGA FRONTIER & MoE MODELS (Bigger than 72B • Max 48GB Budget) ───────┐${C_RESET}"
-        echo -e "│  ${C_BOLD}1)${C_RESET} beam:500b-25b        | 501B | MoE (25B Active) | ~44 GB              │"
+        echo -e "│  ${C_BOLD}1)${C_RESET} qwen2.5:72b          | 72B  | Dense Frontier   | ~38–42 GB           │"
         echo -e "│  ${C_BOLD}2)${C_RESET} mixtral:8x22b        | 141B | MoE (39B Active) | ~42 GB              │"
         echo -e "│  ${C_BOLD}3)${C_RESET} command-r-plus:104b  | 104B | Dense Enterprise | ~40 GB              │"
         echo -e "│  ${C_BOLD}4)${C_RESET} deepseek-r1:671b     | 671B | MoE (37B Active) | ~46 GB              │"
-        echo -e "│  ${C_BOLD}5)${C_RESET} qwen2.5:72b          | 72B  | Dense Frontier   | ~38–42 GB           │"
+        echo -e "│  ${C_BOLD}5)${C_RESET} llama3.3:70b         | 70B  | Dense Flagship   | ~40 GB              │"
         echo -e "${C_BOLD}${C_RED}└─────────────────────────────────────────────────────────────────────────┘${C_RESET}"
         read_input "${C_BOLD}Select model [1-5, or name, default 1]: ${C_RESET}" F_CHOICE
         case "$F_CHOICE" in
           2|8x22b|mixtral) cmd_run "mixtral:8x22b" ;;
           3|104b|command-r*) cmd_run "command-r-plus:104b" ;;
-          4|671b|deepseek-671b) cmd_run "deepseek-r1:671b" ;;
-          5|72b|qwen-72b) cmd_run "qwen2.5:72b" ;;
-          *) cmd_run "beam:500b-25b" ;;
+          4|671b|deepseek*|500b*|beam*) cmd_run "deepseek-r1:671b" ;;
+          5|70b|llama*) cmd_run "llama3.3:70b" ;;
+          *) cmd_run "qwen2.5:72b" ;;
         esac
         ;;
       5)
@@ -3276,11 +3411,15 @@ case "$1" in
   share|serve|web)
     bash "${DIR}/share.sh" "$2"
     ;;
-  models|model|hub)
-    cmd_models_table
+  mod|mods|models|model|hub|catalog|c)
+    if [ -n "$2" ]; then
+      cmd_run "$2"
+    else
+      cmd_big_catalog
+    fi
     ;;
-  catalog)
-    cmd_big_catalog
+  1|2|3|4|5|6|11|12|13|14|15|16|21|22|23|24|25|26|31|32|33|34|41|42|43|44|51|52|53|54|55|61|62|63|64|65|32b|72b|14b|7b|1.5b)
+    cmd_run "$1"
     ;;
   list|ls)
     cmd_list

@@ -409,9 +409,59 @@ C_WHITE = "\033[38;5;255m"
 
 def resolve_model_name(name):
     if not name:
-        return "qwen2.5-coder:1.5b"
-    n = name.strip()
+        return "qwen3:14b"
+    n = str(name).strip()
+    # Strip common command prefixes like "mod ", "mode ", "model ", "models ", "m ", "/run "
+    for pfx in ("mod ", "mode ", "model ", "models ", "m ", "/run "):
+        if n.lower().startswith(pfx):
+            n = n[len(pfx):].strip()
+            break
     nl = n.lower()
+
+    # Universal Catalog Number Mappings
+    catalog_map = {
+        # Single-digit family mappings
+        "1": "qwen3:14b",
+        "2": "deepseek-r1:14b",
+        "3": "llama3.1:8b",
+        "4": "mistral:7b",
+        "5": "gemma2:9b",
+        "6": "qwen2.5:72b",
+        # Sub-indices from 11 to 65
+        "11": "qwen2.5-coder:1.5b",
+        "12": "qwen2.5-coder:7b",
+        "13": "qwen2.5-coder:14b",
+        "14": "qwen2.5-coder:32b-instruct-q3_K_M",
+        "15": "qwen3:14b",
+        "16": "qwen2.5:72b",
+        "21": "deepseek-r1:1.5b",
+        "22": "deepseek-r1:7b",
+        "23": "deepseek-r1:14b",
+        "24": "deepseek-r1:32b",
+        "25": "deepseek-r1:70b",
+        "26": "deepseek-coder:6.7b",
+        "31": "llama3.2:1b",
+        "32": "llama3.2:3b",
+        "33": "llama3.1:8b",
+        "34": "llama3.3:70b",
+        "41": "mistral:7b",
+        "42": "mistral-nemo:12b",
+        "43": "codestral:22b",
+        "44": "mistral-small:24b",
+        "51": "gemma2:2b",
+        "52": "gemma2:9b",
+        "53": "gemma2:27b",
+        "54": "phi3.5:3.8b",
+        "55": "phi4:14b",
+        "61": "deepseek-r1:671b",
+        "62": "mixtral:8x22b",
+        "63": "command-r-plus:104b",
+        "64": "deepseek-r1:671b",
+        "65": "qwen2.5:72b",
+    }
+    if nl in catalog_map:
+        return catalog_map[nl]
+
     if nl in ("32b", "32", "32b-coder", "qwen-32b", "qwen2.5-32b"):
         try:
             with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as resp:
@@ -435,7 +485,8 @@ def resolve_model_name(name):
             pass
         return "qwen2.5:72b-instruct-q3_K_M"
     if nl in ("500b", "500b25b", "501b", "beam", "beam:500b", "beam:500b-25b", "reflection:500b"):
-        return "beam:500b-25b"
+        # Largest flagship MoE available on Ollama library (671B total / 37B active)
+        return "deepseek-r1:671b"
     if nl in ("8x22b", "mixtral:8x22b", "141b", "mixtral-8x22b", "mixtral"):
         return "mixtral:8x22b"
     if nl in ("104b", "command-r-plus", "command-r-plus:104b", "command-r+", "commandr+"):
@@ -446,11 +497,13 @@ def resolve_model_name(name):
         return "deepseek-r1:70b"
     if nl in ("llama-70b", "llama3.3:70b", "llama3.3-70b"):
         return "llama3.3:70b"
-    if nl in ("14b", "14", "qwen-14b", "qwen3-14b"):
+    if nl in ("llama", "llama3", "llama3.1", "llama-8b", "8b"):
+        return "llama3.1:8b"
+    if nl in ("14b", "14", "qwen", "qwen-14b", "qwen3", "qwen3-14b"):
         return "qwen3:14b"
-    if nl in ("1.5b", "1.5", "qwen-1.5b"):
+    if nl in ("1.5b", "1.5", "qwen-1.5b", "coder"):
         return "qwen2.5-coder:1.5b"
-    if nl in ("7b", "7", "qwen-7b"):
+    if nl in ("7b", "7", "qwen-7b", "coder-7b"):
         return "qwen2.5-coder:7b"
     return n
 
@@ -653,7 +706,7 @@ def ensure_model_installed(model_name):
                     return True
     except KeyboardInterrupt:
         print(f"\n{C_YELLOW}[!] Download cancelled by user.{C_RESET}")
-        sys.exit(130)
+        return False
     except Exception as e:
         print(f"\n{C_YELLOW}[!] Download warning: {e}{C_RESET}")
         return False
@@ -1103,8 +1156,14 @@ def ensure_parallel_backend(model1, model2):
 def run_parallel_swarm_session(model1_name, model2_name):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
-    ensure_model_installed(model1)
-    ensure_model_installed(model2)
+    if not ensure_model_installed(model1):
+        print(f"\n{C_YELLOW}[!] Falling back model 1 to local 'qwen3:14b'{C_RESET}")
+        model1 = "qwen3:14b"
+        ensure_model_installed(model1)
+    if not ensure_model_installed(model2):
+        print(f"\n{C_YELLOW}[!] Falling back model 2 to local 'qwen2.5-coder:1.5b'{C_RESET}")
+        model2 = "qwen2.5-coder:1.5b"
+        ensure_model_installed(model2)
 
     api_base = ensure_parallel_backend(model1, model2)
 
@@ -1489,8 +1548,14 @@ def run_parallel_swarm_session(model1_name, model2_name):
 def run_swarm_debate_session(model1_name, model2_name, rounds=2):
     model1 = resolve_model_name(model1_name)
     model2 = resolve_model_name(model2_name)
-    ensure_model_installed(model1)
-    ensure_model_installed(model2)
+    if not ensure_model_installed(model1):
+        print(f"\n{C_YELLOW}[!] Falling back model 1 to local 'qwen3:14b'{C_RESET}")
+        model1 = "qwen3:14b"
+        ensure_model_installed(model1)
+    if not ensure_model_installed(model2):
+        print(f"\n{C_YELLOW}[!] Falling back model 2 to local 'qwen2.5-coder:1.5b'{C_RESET}")
+        model2 = "qwen2.5-coder:1.5b"
+        ensure_model_installed(model2)
 
     os.system("clear 2>/dev/null || true")
     print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
@@ -1705,10 +1770,17 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
 
 def run_chat_session(model_name):
     model_name = resolve_model_name(model_name)
-    ensure_model_installed(model_name)
+    ok = ensure_model_installed(model_name)
+    if not ok:
+        print(f"\n{C_YELLOW}[!] Model '{model_name}' could not be loaded or download was cancelled.{C_RESET}")
+        print(f"{C_GREEN}[*] Falling back to installed flagship model: qwen3:14b{C_RESET}")
+        time.sleep(1)
+        model_name = "qwen3:14b"
+        ensure_model_installed(model_name)
     os.system("clear 2>/dev/null || true")
     m_lower = model_name.lower()
     is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
+    is_70b = is_giant
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
