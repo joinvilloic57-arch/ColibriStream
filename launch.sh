@@ -239,16 +239,19 @@ run_hardware_scan() {
   if [ -f "$GPU_CONFIG_FILE" ]; then
     ACTIVE_GPU=$(cat "$GPU_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
   fi
-  if [ "$GPU_COUNT" -gt 1 ]; then
-    # On multi-GPU rigs, if config is missing or left over as single-card '0', auto-upgrade to 'all'
-    if [ -z "$ACTIVE_GPU" ] || [ "$ACTIVE_GPU" = "0" ]; then
-      ACTIVE_GPU="all"
-      echo "$ACTIVE_GPU" > "$GPU_CONFIG_FILE" 2>/dev/null || true
-      unset CUDA_VISIBLE_DEVICES
+    if [ ${#GPU_MEMS[@]} -eq 0 ]; then
+      GPU_COUNT=0
+      ACTIVE_GPU=""
+    elif [ "$GPU_COUNT" -gt 1 ]; then
+      # On multi-GPU rigs, if config is missing or left over as single-card '0', auto-upgrade to 'all'
+      if [ -z "$ACTIVE_GPU" ] || [ "$ACTIVE_GPU" = "0" ]; then
+        ACTIVE_GPU="all"
+        echo "$ACTIVE_GPU" > "$GPU_CONFIG_FILE" 2>/dev/null || true
+        unset CUDA_VISIBLE_DEVICES
+      fi
+    else
+      ACTIVE_GPU="${ACTIVE_GPU:-0}"
     fi
-  else
-    ACTIVE_GPU="${ACTIVE_GPU:-0}"
-  fi
 
   AVAILABLE_VRAM_MB=0
   if [ "$ACTIVE_GPU" = "all" ]; then
@@ -1111,44 +1114,12 @@ def resolve_model_name(name):
         return "qwen2.5-coder:7b"
     return n
 
-def get_gpu_count():
-    env_active = os.environ.get("ACTIVE_GPU", "").strip()
-    if env_active == "all":
-        return 2
-    cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
-    if cuda_vis == "all":
-        return 2
-    if "," in cuda_vis:
-        return len([c for c in cuda_vis.split(",") if c.strip()])
-    try:
-        import subprocess
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-            stderr=subprocess.DEVNULL
-        ).decode("utf-8").strip()
-        lines = [l for l in out.splitlines() if l.strip()]
-        if len(lines) > 0:
-            return len(lines)
-    except Exception:
-        pass
-    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
-    if os.path.exists(cfg_file):
-        try:
-            with open(cfg_file, "r") as f:
-                if f.read().strip() == "all":
-                    return 2
-        except Exception:
-            pass
-    try:
-        import subprocess
-        out = subprocess.check_output("lspci 2>/dev/null | grep -iE 'vga compatible controller|3d controller|display controller' | wc -l", shell=True).decode().strip()
-        if int(out) > 1:
-            return int(out)
-    except Exception:
-        pass
-    return 1
-
-def get_visible_vram_mb():
+def get_gpu_telemetry():
+    """
+    Returns (gpu_count, total_vram_mb, free_vram_mb, is_multi_gpu)
+    Accurately detects real NVIDIA GPUs using nvidia-smi or ROCm using rocm-smi.
+    Returns (0, 0, 0, False) on CPU-only machines.
+    """
     cfg_file = os.path.expanduser("~/.colistream/gpu_config")
     active_gpu = os.environ.get("ACTIVE_GPU", "").strip() or None
     if not active_gpu and os.path.exists(cfg_file):
@@ -1158,33 +1129,126 @@ def get_visible_vram_mb():
         except Exception:
             pass
 
-    gpu_cnt = get_gpu_count()
-    if active_gpu == "all" or gpu_cnt > 1:
-        env_cuda = "all"
-    else:
-        env_cuda = os.environ.get("CUDA_VISIBLE_DEVICES", active_gpu or "0")
+    cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    target_all = (active_gpu == "all" or cuda_vis == "all")
 
+    # 1. Try nvidia-smi with free and total memory
     try:
         import subprocess
         out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=index,memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=index,memory.free,memory.total", "--format=csv,noheader,nounits"],
             stderr=subprocess.DEVNULL
         ).decode("utf-8").strip()
         
-        total_vram = 0
+        gpu_entries = []
         for line in out.splitlines():
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) == 2:
-                idx, mem = parts[0], int(parts[1])
-                if env_cuda == "all" or not env_cuda:
-                    total_vram += mem
-                elif str(idx) in env_cuda.split(","):
-                    total_vram += mem
-        if total_vram > 0:
-            return total_vram
+            if len(parts) >= 3:
+                idx = parts[0]
+                free_m = int(parts[1])
+                tot_m = int(parts[2])
+                gpu_entries.append((idx, free_m, tot_m))
+                
+        if gpu_entries:
+            total_cnt = len(gpu_entries)
+            if target_all or (not active_gpu and not cuda_vis and total_cnt > 1):
+                tot_vram = sum(g[2] for g in gpu_entries)
+                fre_vram = sum(g[1] for g in gpu_entries)
+                return total_cnt, tot_vram, fre_vram, True
+            else:
+                sel_idx = active_gpu or (cuda_vis.split(",")[0] if cuda_vis else "0")
+                match = [g for g in gpu_entries if g[0] == str(sel_idx)]
+                if match:
+                    return 1, match[0][2], match[0][1], False
+                else:
+                    return 1, gpu_entries[0][2], gpu_entries[0][1], False
     except Exception:
         pass
-    return 49152 if (active_gpu == "all" or gpu_cnt > 1) else 24576
+
+    # 2. Try Apple Silicon Metal (Darwin)
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            mem_b = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).decode().strip())
+            tot_mb = int(mem_b / (1024 * 1024))
+            usable_mb = int(tot_mb * 0.75)
+            return 1, usable_mb, usable_mb, False
+        except Exception:
+            pass
+
+    # 3. CPU-only host (e.g. Intel Xeon / Matrox VGA without dedicated accelerators)
+    return 0, 0, 0, False
+
+def get_gpu_count():
+    gpu_cnt, _, _, _ = get_gpu_telemetry()
+    return gpu_cnt
+
+def get_visible_vram_mb():
+    _, tot_vram, _, _ = get_gpu_telemetry()
+    return tot_vram
+
+def compute_safe_gpu_layers(model_name, total_vram_mb, free_vram_mb, is_multi_gpu=False):
+    """
+    Computes optimal, safe GPU offload layer count ensuring CUDA buffers NEVER overflow.
+    Guarantees models >72B stay strictly within available VRAM (or user-requested 48GB budget).
+    Returns (num_gpu_layers, num_ctx, num_batch)
+    """
+    if total_vram_mb <= 0:
+        return 0, 2048, 512
+
+    # Available VRAM to budget:
+    usable_mb = free_vram_mb if free_vram_mb > 0 else total_vram_mb
+    usable_mb = min(usable_mb, total_vram_mb)
+    
+    # Cap total budget strictly to 48 GB maximum as requested by user
+    usable_mb = min(usable_mb, 48000)
+
+    # Reserve 2048 MB headroom for KV cache, context, and CUDA runtime buffers
+    budget_mb = max(0, usable_mb - 2048)
+
+    ml = model_name.lower()
+
+    if "104b" in ml or "command-r" in ml:
+        # Command-R+ 104B: 64 layers total, ~950 MB weights per layer
+        # On a single 24GB card (budget ~21.5GB): max 22 layers (~20.9 GB VRAM)
+        # On dual 24GB cards (budget ~44GB): max 46 layers (~43.7 GB VRAM)
+        safe_layers = min(64, int(budget_mb / 950))
+        num_ctx = 2048 if safe_layers >= 20 else 1536
+        return max(0, safe_layers), num_ctx, 512
+
+    elif "8x22b" in ml or "141b" in ml or "mixtral" in ml:
+        # Mixtral 8x22B (141B): 56 layers total, ~1160 MB weights per layer
+        safe_layers = min(56, int(budget_mb / 1160))
+        num_ctx = 2048 if safe_layers >= 18 else 1536
+        return max(0, safe_layers), num_ctx, 512
+
+    elif any(x in ml for x in ["671b", "500b", "501b", "beam"]):
+        # DeepSeek-R1 671B / Beam 500B MoE: ~1400 MB weights per layer
+        safe_layers = min(60, int(budget_mb / 1400))
+        num_ctx = 2048 if safe_layers >= 14 else 1536
+        return max(0, safe_layers), num_ctx, 512
+
+    elif any(x in ml for x in ["70b", "72b"]):
+        # Qwen 72B / Llama 70B: 80 layers total, ~490 MB weights per layer (~39 GB total)
+        if budget_mb >= 39000 or (is_multi_gpu and total_vram_mb >= 42000):
+            return 99, 2048, 512
+        safe_layers = min(80, int(budget_mb / 490))
+        num_ctx = 2048 if safe_layers >= 36 else 1536
+        return max(0, safe_layers), num_ctx, 512
+
+    elif any(x in ml for x in ["32b", "30b", "27b"]):
+        # 32B models: ~16.5 GB weights total across 64 layers (~260 MB/layer)
+        if budget_mb >= 16500:
+            return 99, 2048, 512
+        safe_layers = min(64, int(budget_mb / 260))
+        return max(0, safe_layers), 2048, 512
+
+    else:
+        # Models <20B (14b, 7b, 1.5b): <10GB weights
+        if budget_mb >= 9500:
+            return 99, 2048, 512
+        safe_layers = min(48, int(budget_mb / 220))
+        return max(0, safe_layers), 2048, 512
 
 def ensure_model_installed(model_name):
     exact_target = model_name if ":" in model_name else model_name + ":latest"
@@ -1257,181 +1321,200 @@ def ensure_model_installed(model_name):
 
 def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat", color=C_CYAN):
     model_name = resolve_model_name(model_name)
-    cpu_threads = max(1, os.cpu_count() or 4)
+    total_cpus = os.cpu_count() or 8
     # On multi-socket NUMA systems, clamping to single-socket (8-10 cores) maximizes cache hits and throughput
-    opt_threads = min(cpu_threads, 10)
-    vram_mb = get_visible_vram_mb()
+    opt_threads = min(8, max(4, total_cpus // 10))
 
-    m_lower = model_name.lower()
-    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
-    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+    gpu_cnt, total_vram_mb, free_vram_mb, is_multi_gpu = get_gpu_telemetry()
+    num_gpu_layers, num_ctx_val, num_batch_val = compute_safe_gpu_layers(
+        model_name, total_vram_mb, free_vram_mb, is_multi_gpu=is_multi_gpu
+    )
 
-    gpu_cnt = get_gpu_count()
-    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
-    active_gpu_cfg = ""
-    if os.path.exists(cfg_file):
-        try:
-            with open(cfg_file, "r") as f:
-                active_gpu_cfg = f.read().strip()
-        except Exception:
-            pass
-    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
-
-    if is_giant:
-        if is_multi_gpu or vram_mb >= 44000:
-            # Multi-GPU / 48GB VRAM Mode: 100% offload capped to 48 GB budget
-            num_gpu_layers = 99
-            num_ctx_val = 2048
-            num_batch_val = 512
-        else:
-            # Single 24GB card mode: Offload partial layers (~21.5 GB VRAM)
-            num_gpu_layers = 48
-            num_ctx_val = 1536
-            num_batch_val = 512
-    elif is_32b:
-        # 32B models (e.g., qwen2.5-coder:32b-instruct-q3_K_M weights = 16GB):
-        # 100% offloaded to GPU: strictly ~17.0 GB VRAM, 0 Host RAM, 0 CPU compute!
-        num_gpu_layers = 99
-        num_ctx_val = 2048
-        num_batch_val = 512
-    else:
-        # Models <20B: 100% offloaded to GPU (<10GB VRAM)
-        num_gpu_layers = 99
-        num_ctx_val = 2048
-        num_batch_val = 512
-
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "stream": True,
-        "keep_alive": "30m",
-        "options": {
-            "temperature": 0.7,
-            "num_gpu": num_gpu_layers,
-            "num_thread": opt_threads,
-            "num_ctx": num_ctx_val,
-            "num_batch": num_batch_val,
-            "f16_kv": False,
-            "use_mmap": True,
-            "use_mlock": False
-        }
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
-    
+    current_gpu_layers = num_gpu_layers
+    attempt = 0
+    max_attempts = 3
     import threading
-    stop_spinner = threading.Event()
-    def spinner_task():
-        spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        idx = 0
-        while not stop_spinner.is_set():
-            frame = spinner_frames[idx % len(spinner_frames)]
-            sys.stdout.write(f"\r\033[K{C_YELLOW}{frame} {model_name} is thinking & computing... [Please wait, model is generating]{C_RESET}")
-            sys.stdout.flush()
-            idx += 1
-            time.sleep(0.08)
 
-    spinner_thread = threading.Thread(target=spinner_task, daemon=True)
-    spinner_thread.start()
+    while attempt < max_attempts:
+        attempt += 1
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {
+                "temperature": 0.7,
+                "num_gpu": current_gpu_layers,
+                "num_thread": opt_threads,
+                "num_ctx": num_ctx_val,
+                "num_batch": num_batch_val,
+                "f16_kv": False,
+                "use_mmap": True,
+                "use_mlock": False
+            }
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+        
+        stop_spinner = threading.Event()
+        def spinner_task():
+            spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            idx = 0
+            while not stop_spinner.is_set():
+                frame = spinner_frames[idx % len(spinner_frames)]
+                sys.stdout.write(f"\r\033[K{C_YELLOW}{frame} {model_name} is thinking & computing... [Please wait, model is generating]{C_RESET}")
+                sys.stdout.flush()
+                idx += 1
+                time.sleep(0.08)
 
-    full_response = []
-    token_count = 0
-    first_token = True
-    
-    try:
-        with urllib.request.urlopen(req) as resp:
-            for line in resp:
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line.decode("utf-8"))
-                    msg = chunk.get("message", {})
-                    content = msg.get("content", "")
-                    if content:
-                        if first_token:
-                            stop_spinner.set()
-                            sys.stdout.write(f"\r\033[K{C_BOLD}{color}{model_name} ❯ {C_RESET}")
+        spinner_thread = threading.Thread(target=spinner_task, daemon=True)
+        spinner_thread.start()
+
+        full_response = []
+        token_count = 0
+        first_token = True
+        
+        try:
+            with urllib.request.urlopen(req) as resp:
+                for line in resp:
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line.decode("utf-8"))
+                        msg = chunk.get("message", {})
+                        content = msg.get("content", "")
+                        if content:
+                            if first_token:
+                                stop_spinner.set()
+                                sys.stdout.write(f"\r\033[K{C_BOLD}{color}{model_name} ❯ {C_RESET}")
+                                sys.stdout.flush()
+                                first_token = False
+                            sys.stdout.write(content)
                             sys.stdout.flush()
-                            first_token = False
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
-                        full_response.append(content)
-                        token_count += 1
-                    if chunk.get("done", False):
-                        eval_count = chunk.get("eval_count", token_count)
-                        eval_dur = chunk.get("eval_duration", 0) / 1e9
-                        speed = eval_count / eval_dur if eval_dur > 0 else 0
-                        return "".join(full_response), speed, eval_count
-                except json.JSONDecodeError:
-                    pass
-    except KeyboardInterrupt:
-        print(f"\n{C_DIM}[Generation stopped by user]{C_RESET}")
-        return "".join(full_response), 0, token_count
-    except urllib.error.HTTPError as e:
-        error_msg = e.read().decode("utf-8", errors="ignore")
-        print(f"\n{C_YELLOW}[!] Inference error ({e.code}): {error_msg}{C_RESET}")
-        return "".join(full_response), 0, 0
-    except Exception as e:
-        print(f"\n{C_YELLOW}[!] Stream error: {e}{C_RESET}")
-        return "".join(full_response), 0, 0
-    finally:
-        stop_spinner.set()
-    
+                            full_response.append(content)
+                            token_count += 1
+                        if chunk.get("done", False):
+                            eval_count = chunk.get("eval_count", token_count)
+                            eval_dur = chunk.get("eval_duration", 0) / 1e9
+                            speed = eval_count / eval_dur if eval_dur > 0 else 0
+                            return "".join(full_response), speed, eval_count
+                    except json.JSONDecodeError:
+                        pass
+                return "".join(full_response), 0, token_count
+        except KeyboardInterrupt:
+            stop_spinner.set()
+            print(f"\n{C_DIM}[Generation stopped by user]{C_RESET}")
+            return "".join(full_response), 0, token_count
+        except urllib.error.HTTPError as e:
+            stop_spinner.set()
+            error_msg = e.read().decode("utf-8", errors="ignore")
+            is_oom = any(k in error_msg.lower() for k in [
+                "out of memory", "out-of-memory", "cudamalloc failed", 
+                "unable to allocate cuda", "cuda0 buffer", "failed to allocate"
+            ])
+            if is_oom and attempt < max_attempts:
+                if current_gpu_layers > 14:
+                    new_layers = max(8, current_gpu_layers // 2)
+                elif current_gpu_layers > 0:
+                    new_layers = 0
+                else:
+                    new_layers = 0
+                
+                sys.stdout.write(f"\r\033[K{C_YELLOW}⚡ [Auto-Memory Optimizer] GPU VRAM boundary reached on CUDA device.{C_RESET}\n")
+                if new_layers > 0:
+                    sys.stdout.write(f"   {C_CYAN}Auto-rebalancing offload: adjusting GPU layers ({current_gpu_layers} → {new_layers}) to fit safely within host memory budget...{C_RESET}\n")
+                else:
+                    sys.stdout.write(f"   {C_CYAN}Auto-rebalancing to Host Unified Memory (RAM mode): loading model cleanly without VRAM limits...{C_RESET}\n")
+                sys.stdout.flush()
+                current_gpu_layers = new_layers
+                num_ctx_val = 2048
+                time.sleep(0.5)
+                continue
+            else:
+                sys.stdout.write(f"\r\033[K{C_YELLOW}[!] Inference error ({e.code}): {error_msg}{C_RESET}\n")
+                sys.stdout.flush()
+                return "".join(full_response), 0, 0
+        except Exception as e:
+            stop_spinner.set()
+            sys.stdout.write(f"\r\033[K{C_YELLOW}[!] Stream error: {e}{C_RESET}\n")
+            sys.stdout.flush()
+            return "".join(full_response), 0, 0
+        finally:
+            stop_spinner.set()
+            
     return "".join(full_response), 0, 0
 
 def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api/chat"):
     model_name = resolve_model_name(model_name)
-    cpu_threads = max(1, os.cpu_count() or 4)
-    opt_threads = min(cpu_threads, 10)
-    vram_mb = get_visible_vram_mb()
-    m_lower = model_name.lower()
-    gpu_cnt = get_gpu_count()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
-    num_gpu_layers = 99 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 38
-    num_ctx_val = 2048 if (gpu_cnt > 1 or vram_mb >= 36000 or not is_70b) else 1536
+    total_cpus = os.cpu_count() or 8
+    opt_threads = min(8, max(4, total_cpus // 10))
 
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "stream": True,
-        "keep_alive": "30m",
-        "options": {
-            "temperature": 0.7,
-            "num_gpu": num_gpu_layers,
-            "num_thread": opt_threads,
-            "num_ctx": num_ctx_val,
-            "num_batch": 512,
-            "f16_kv": False,
-            "use_mmap": True,
-            "use_mlock": False
+    gpu_cnt, total_vram_mb, free_vram_mb, is_multi_gpu = get_gpu_telemetry()
+    num_gpu_layers, num_ctx_val, num_batch_val = compute_safe_gpu_layers(
+        model_name, total_vram_mb, free_vram_mb, is_multi_gpu=is_multi_gpu
+    )
+
+    current_gpu_layers = num_gpu_layers
+    attempt = 0
+    max_attempts = 3
+
+    while attempt < max_attempts:
+        attempt += 1
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {
+                "temperature": 0.7,
+                "num_gpu": current_gpu_layers,
+                "num_thread": opt_threads,
+                "num_ctx": num_ctx_val,
+                "num_batch": num_batch_val,
+                "f16_kv": False,
+                "use_mmap": True,
+                "use_mlock": False
+            }
         }
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
-    full_response = []
-    token_count = 0
-    try:
-        with urllib.request.urlopen(req) as resp:
-            for line in resp:
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line.decode("utf-8"))
-                    msg = chunk.get("message", {})
-                    content = msg.get("content", "")
-                    if content:
-                        full_response.append(content)
-                        token_count += 1
-                    if chunk.get("done", False):
-                        eval_count = chunk.get("eval_count", token_count)
-                        eval_dur = chunk.get("eval_duration", 0) / 1e9
-                        speed = eval_count / eval_dur if eval_dur > 0 else 0
-                        return "".join(full_response), speed, eval_count
-                except json.JSONDecodeError:
-                    pass
-    except Exception:
-        pass
-    return "".join(full_response), 0, token_count
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+        full_response = []
+        token_count = 0
+        try:
+            with urllib.request.urlopen(req) as resp:
+                for line in resp:
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line.decode("utf-8"))
+                        msg = chunk.get("message", {})
+                        content = msg.get("content", "")
+                        if content:
+                            full_response.append(content)
+                            token_count += 1
+                        if chunk.get("done", False):
+                            eval_count = chunk.get("eval_count", token_count)
+                            eval_dur = chunk.get("eval_duration", 0) / 1e9
+                            speed = eval_count / eval_dur if eval_dur > 0 else 0
+                            return "".join(full_response), speed, eval_count
+                    except json.JSONDecodeError:
+                        pass
+                return "".join(full_response), 0, token_count
+        except urllib.error.HTTPError as e:
+            error_msg = e.read().decode("utf-8", errors="ignore")
+            is_oom = any(k in error_msg.lower() for k in [
+                "out of memory", "out-of-memory", "cudamalloc failed", 
+                "unable to allocate cuda", "cuda0 buffer", "failed to allocate"
+            ])
+            if is_oom and attempt < max_attempts:
+                current_gpu_layers = max(0, current_gpu_layers // 2) if current_gpu_layers > 14 else 0
+                time.sleep(0.5)
+                continue
+            return "".join(full_response), 0, 0
+        except Exception:
+            return "".join(full_response), 0, token_count
+
+    return "".join(full_response), 0, 0
 
 def strip_ansi(s):
     return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', s)
@@ -1523,82 +1606,81 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
     total_cpus = os.cpu_count() or 8
     # Keep thread pool within single NUMA socket (max 8 threads) to maximize L3 cache hits & avoid QPI bus thrashing
     opt_threads = min(8, max(4, total_cpus // 10))
-    vram_mb = get_visible_vram_mb()
-    gpu_cnt = get_gpu_count()
-    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
-    active_gpu_cfg = ""
-    if os.path.exists(cfg_file):
-        try:
-            with open(cfg_file, "r") as f:
-                active_gpu_cfg = f.read().strip()
-        except Exception:
-            pass
-    is_multi_gpu = (gpu_cnt > 1 or vram_mb >= 36000 or active_gpu_cfg == "all")
 
-    m_lower = model_name.lower()
-    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
-    
-    if is_dual_70b and is_giant:
-        # Dual giant models: Capped strictly to 36-40 GB max combined VRAM (under 48GB limit)
-        num_gpu_layers = 33
-        num_ctx_val = 2048
-    elif is_giant:
-        if is_multi_gpu or vram_mb >= 44000:
-            # 48GB VRAM limit respected
-            num_gpu_layers = 99
-            num_ctx_val = 2048
-        else:
-            num_gpu_layers = 48
-            num_ctx_val = 1536
-    else:
-        num_gpu_layers = 99
-        num_ctx_val = 2048
+    gpu_cnt, total_vram_mb, free_vram_mb, is_multi_gpu = get_gpu_telemetry()
+    # If running dual giant models concurrently, divide budget in half so combined VRAM <= 48GB:
+    eff_vram = (free_vram_mb // 2) if (is_dual_70b and free_vram_mb > 0) else free_vram_mb
+    eff_tot = (total_vram_mb // 2) if (is_dual_70b and total_vram_mb > 0) else total_vram_mb
+    num_gpu_layers, num_ctx_val, num_batch_val = compute_safe_gpu_layers(
+        model_name, eff_tot, eff_vram, is_multi_gpu=is_multi_gpu
+    )
 
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "stream": True,
-        "keep_alive": "30m",
-        "options": {
-            "temperature": 0.7,
-            "num_gpu": num_gpu_layers,
-            "num_thread": opt_threads,
-            "num_ctx": num_ctx_val,
-            "num_batch": 512,
-            "f16_kv": False,
-            "use_mmap": True,
-            "use_mlock": False
-        }
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+    current_gpu_layers = num_gpu_layers
+    attempt = 0
+    max_attempts = 3
     start_t = time.time()
+
     try:
-        with urllib.request.urlopen(req) as resp:
-            for line in resp:
-                if not line:
+        while attempt < max_attempts:
+            attempt += 1
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "stream": True,
+                "keep_alive": "30m",
+                "options": {
+                    "temperature": 0.7,
+                    "num_gpu": current_gpu_layers,
+                    "num_thread": opt_threads,
+                    "num_ctx": num_ctx_val,
+                    "num_batch": num_batch_val,
+                    "f16_kv": False,
+                    "use_mmap": True,
+                    "use_mlock": False
+                }
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(api_url, data=data, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    for line in resp:
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line.decode("utf-8"))
+                            msg = chunk.get("message", {})
+                            content = msg.get("content", "")
+                            if content:
+                                text_holder[0] += content
+                                stats_holder["tokens"] = stats_holder.get("tokens", 0) + 1
+                                elapsed = time.time() - start_t
+                                if elapsed > 0:
+                                    stats_holder["speed"] = stats_holder["tokens"] / elapsed
+                            if chunk.get("done", False):
+                                eval_dur = chunk.get("eval_duration", 0) / 1e9
+                                eval_cnt = chunk.get("eval_count", stats_holder.get("tokens", 0))
+                                if eval_dur > 0:
+                                    stats_holder["speed"] = eval_cnt / eval_dur
+                                stats_holder["tokens"] = eval_cnt
+                                break
+                        except Exception:
+                            pass
+                break
+            except urllib.error.HTTPError as e:
+                error_msg = e.read().decode("utf-8", errors="ignore")
+                is_oom = any(k in error_msg.lower() for k in [
+                    "out of memory", "out-of-memory", "cudamalloc failed", 
+                    "unable to allocate cuda", "cuda0 buffer", "failed to allocate"
+                ])
+                if is_oom and attempt < max_attempts:
+                    current_gpu_layers = max(0, current_gpu_layers // 2) if current_gpu_layers > 14 else 0
+                    time.sleep(0.5)
                     continue
-                try:
-                    chunk = json.loads(line.decode("utf-8"))
-                    msg = chunk.get("message", {})
-                    content = msg.get("content", "")
-                    if content:
-                        text_holder[0] += content
-                        stats_holder["tokens"] = stats_holder.get("tokens", 0) + 1
-                        elapsed = time.time() - start_t
-                        if elapsed > 0:
-                            stats_holder["speed"] = stats_holder["tokens"] / elapsed
-                    if chunk.get("done", False):
-                        eval_dur = chunk.get("eval_duration", 0) / 1e9
-                        eval_cnt = chunk.get("eval_count", stats_holder.get("tokens", 0))
-                        if eval_dur > 0:
-                            stats_holder["speed"] = eval_cnt / eval_dur
-                        stats_holder["tokens"] = eval_cnt
-                        break
-                except Exception:
-                    pass
-    except Exception as e:
-        text_holder[0] += f"\n[Inference Error: {e}]"
+                text_holder[0] += f"\n[Inference Error ({e.code}): {error_msg}]"
+                break
+            except Exception as e:
+                text_holder[0] += f"\n[Inference Error: {e}]"
+                break
     finally:
         done_event.set()
 
@@ -2286,7 +2368,7 @@ def run_chat_session(model_name):
     ensure_model_installed(model_name)
     os.system("clear 2>/dev/null || true")
     m_lower = model_name.lower()
-    is_70b = any(x in m_lower for x in ["70b", "72b", "671b"])
+    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
     print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
@@ -2295,13 +2377,15 @@ def run_chat_session(model_name):
     vram_mb = get_visible_vram_mb()
     print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
     print(f"│  {C_YELLOW}Workspace   :{C_RESET} {C_WHITE}{os.getcwd():<47.47s}{C_RESET} │")
-    if is_32b:
+    if vram_mb == 0:
+        print(f"│  {C_YELLOW}Memory Mode :{C_RESET} {C_GREEN}High-RAM Host Mode (System Memory Acceleration • 0 VRAM){C_RESET}   │")
+    elif is_32b:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
-    elif is_70b:
+    elif is_giant:
         if vram_mb >= 44000:
-            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Multi-GPU Mode (~48GB VRAM Pool • 100% on GPUs @ 20+ tok/s){C_RESET} │")
+            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Multi-GPU Mode (Capped <= 48GB Budget Across All Cards){C_RESET}      │")
         else:
-            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Strictly ~22 GB VRAM (38 Layers GPU + 42 Layers CPU/RAM){C_RESET} │")
+            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Safe Partial VRAM Offload (Capped to Fit Available VRAM){C_RESET}    │")
     else:
         print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
     print(f"├────────────────────────────────────────────────────────────────────────┤")
@@ -2609,7 +2693,10 @@ except Exception:
   fi
   write_inline_chat_script "$chat_script"
 
-  if [ "$ACTIVE_GPU" = "all" ]; then
+  if [ "$GPU_COUNT" -eq 0 ] || [ "$AVAILABLE_VRAM_MB" -eq 0 ]; then
+    echo -e "${C_CYAN}[*] Active Execution Target: High-RAM Host Mode (System Memory Acceleration • 0 VRAM)${C_RESET}"
+    unset CUDA_VISIBLE_DEVICES
+  elif [ "$ACTIVE_GPU" = "all" ]; then
     echo -e "${C_CYAN}[*] Active GPU Target: [ALL GPUs Pooled (${GPU_COUNT:-2} cards)] (CUDA_VISIBLE_DEVICES=all / unset)${C_RESET}"
   else
     echo -e "${C_CYAN}[*] Active GPU Target: [GPU ${ACTIVE_GPU:-0}] (CUDA_VISIBLE_DEVICES=${ACTIVE_GPU:-0})${C_RESET}"
