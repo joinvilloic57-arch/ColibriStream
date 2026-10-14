@@ -2698,7 +2698,7 @@ cmd_run() {
     14|32b|32B|qwen2.5-coder:32b|qwen2.5:32b)
       model="qwen2.5-coder:32b-instruct-q3_K_M"
       ;;
-    16|72b|72B|qwen2.5:72b|qwen-72b|65)
+    16|64|72b|72B|qwen2.5:72b|qwen-72b)
       local has_q3_72b
       has_q3_72b=$(python3 -c "
 import urllib.request, json
@@ -2728,14 +2728,14 @@ except:
     21) model="deepseek-r1:1.5b" ;;
     22) model="deepseek-r1:7b" ;;
     24) model="deepseek-r1:32b" ;;
-    25) model="deepseek-r1:70b" ;;
+    25|66|deepseek-70b|deepseek-r1:70b) model="deepseek-r1:70b" ;;
     26) model="deepseek-coder:6.7b" ;;
     3|33|llama|llama3|llama3.1|llama-8b|8b)
       model="llama3.1:8b"
       ;;
     31) model="llama3.2:1b" ;;
     32) model="llama3.2:3b" ;;
-    34|llama-70b|llama3.3:70b)
+    34|65|llama-70b|llama3.3:70b|70b)
       model="llama3.3:70b"
       ;;
     4|41|mistral)
@@ -2751,7 +2751,7 @@ except:
     53) model="gemma2:27b" ;;
     54) model="phi3.5:3.8b" ;;
     55) model="phi4:14b" ;;
-    6|61|64|500b|500b25b|501b|beam|beam:500b*|671b|deepseek-671b|deepseek-r1:671b)
+    61|deepseek-671b|deepseek-r1:671b|671b)
       model="deepseek-r1:671b"
       ;;
     62|8x22b|mixtral:8x22b|141b)
@@ -2759,6 +2759,33 @@ except:
       ;;
     63|104b|command-r-plus|command-r-plus:104b)
       model="command-r-plus:104b"
+      ;;
+    67|500b|500b25b|501b|beam|beam:500b*)
+      model="deepseek-r1:671b"
+      ;;
+    6)
+      if [ -t 0 ]; then
+        echo -e "\n${C_BOLD}${C_RED}─── [6] MEGA FRONTIER & MoE MODELS (<=48GB Budget) ───${C_RESET}"
+        echo -e "  ${C_CYAN}61)${C_RESET} deepseek-r1:671b     (671B MoE 37B active • ~46 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}62)${C_RESET} mixtral:8x22b         (141B MoE 39B active • ~42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}63)${C_RESET} command-r-plus:104b   (104B Dense Enterprise • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}64)${C_RESET} qwen2.5:72b           (72B Dense Frontier • ~38–42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}65)${C_RESET} llama3.3:70b          (70B Flagship GPT-4o • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}66)${C_RESET} deepseek-r1:70b       (70B Enterprise Reasoning • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}67)${C_RESET} beam:500b-25b         (501B MoE 25B active • ~44 GB RAM/VRAM)"
+        read_input "${C_BOLD}Select Mega Model [61-67, default 64]: ${C_RESET}" SUB_6_CHOICE
+        case "$SUB_6_CHOICE" in
+          61|671b|deepseek-671b) model="deepseek-r1:671b" ;;
+          62|8x22b|mixtral) model="mixtral:8x22b" ;;
+          63|104b|command*) model="command-r-plus:104b" ;;
+          65|70b|llama*) model="llama3.3:70b" ;;
+          66|deepseek-70b|r1-70b) model="deepseek-r1:70b" ;;
+          67|500b|beam*) model="deepseek-r1:671b" ;;
+          *) model="qwen2.5:72b-instruct-q3_K_M" ;;
+        esac
+      else
+        model="qwen2.5:72b-instruct-q3_K_M"
+      fi
       ;;
   esac
 
@@ -3228,12 +3255,14 @@ cmd_big_catalog() {
     echo -e "    54) phi3.5:3.8b         ${C_DIM}(3.8B | Microsoft Compact Reasoning | ~2.5 GB RAM)${C_RESET}"
     echo -e "    55) phi4:14b            ${C_DIM}(14B  | Microsoft Synthetic Math/Code | ~9.5 GB RAM)${C_RESET}\n"
 
-    echo -e "${C_RED}${C_BOLD}[6] MEGA FRONTIER & MoE (Bigger than 72B • Max 48GB Budget)${C_RESET}"
-    echo -e "    61) beam:500b-25b       ${C_DIM}(501B | MoE (25B Active) | ~44 GB | 500b, 500b25b, beam)${C_RESET}"
-    echo -e "    62) mixtral:8x22b       ${C_DIM}(141B | MoE (39B Active) | ~42 GB | 8x22b, 141b, mixtral)${C_RESET}"
-    echo -e "    63) command-r-plus:104b ${C_DIM}(104B | Dense Enterprise | ~40 GB | 104b, command-r-plus)${C_RESET}"
-    echo -e "    64) deepseek-r1:671b    ${C_DIM}(671B | MoE (37B Active) | ~46 GB | 671b, deepseek-671b)${C_RESET}"
-    echo -e "    65) qwen2.5:72b         ${C_DIM}(72B  | Dense Frontier   | ~38–42 GB | 72b, qwen-72b)${C_RESET}\n"
+    echo -e "${C_RED}${C_BOLD}[6] MEGA FRONTIER & MoE (All Free Open-Weight Giants • <=48GB Budget)${C_RESET}"
+    echo -e "    61) deepseek-r1:671b    ${C_DIM}(671B | MoE (37B Active) | ~46 GB RAM/VRAM | 671b, deepseek-671b)${C_RESET}"
+    echo -e "    62) mixtral:8x22b       ${C_DIM}(141B | MoE (39B Active) | ~42 GB RAM/VRAM | 8x22b, mixtral)${C_RESET}"
+    echo -e "    63) command-r-plus:104b ${C_DIM}(104B | Dense Enterprise | ~40 GB RAM/VRAM | 104b, command-r-plus)${C_RESET}"
+    echo -e "    64) qwen2.5:72b         ${C_DIM}(72B  | Dense Frontier   | ~38–42 GB RAM/VRAM | 72b, qwen-72b)${C_RESET}"
+    echo -e "    65) llama3.3:70b        ${C_DIM}(70B  | Flagship GPT-4o  | ~40 GB RAM/VRAM | llama-70b, 70b)${C_RESET}"
+    echo -e "    66) deepseek-r1:70b     ${C_DIM}(70B  | Enterprise Logic | ~40 GB RAM/VRAM | deepseek-70b, r1-70b)${C_RESET}"
+    echo -e "    67) beam:500b-25b       ${C_DIM}(501B | MoE (25B Active) | ~44 GB RAM/VRAM | 500b, beam)${C_RESET}\n"
 
     read_input "${C_BOLD}Select model number (e.g. 11, 22, 33, 61), 'b' for Back, or 'q' to Quit: ${C_RESET}" SUB_CHOICE
 
@@ -3255,7 +3284,26 @@ cmd_big_catalog() {
       3) TARGET_MODEL="llama3.1:8b" ;;
       4) TARGET_MODEL="mistral:7b" ;;
       5) TARGET_MODEL="gemma2:9b" ;;
-      6) TARGET_MODEL="qwen2.5:72b" ;;
+      6)
+        echo -e "\n${C_BOLD}${C_RED}─── [6] MEGA FRONTIER & MoE MODELS (<=48GB Budget) ───${C_RESET}"
+        echo -e "  ${C_CYAN}61)${C_RESET} deepseek-r1:671b     (671B MoE 37B active • ~46 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}62)${C_RESET} mixtral:8x22b         (141B MoE 39B active • ~42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}63)${C_RESET} command-r-plus:104b   (104B Dense Enterprise • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}64)${C_RESET} qwen2.5:72b           (72B Dense Frontier • ~38–42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}65)${C_RESET} llama3.3:70b          (70B Flagship GPT-4o • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}66)${C_RESET} deepseek-r1:70b       (70B Enterprise Reasoning • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}67)${C_RESET} beam:500b-25b         (501B MoE 25B active • ~44 GB RAM/VRAM)"
+        read_input "${C_BOLD}Select Mega Model [61-67, default 64]: ${C_RESET}" SUB_6_CHOICE
+        case "$SUB_6_CHOICE" in
+          61|671b|deepseek-671b) TARGET_MODEL="deepseek-r1:671b" ;;
+          62|8x22b|mixtral) TARGET_MODEL="mixtral:8x22b" ;;
+          63|104b|command*) TARGET_MODEL="command-r-plus:104b" ;;
+          65|70b|llama*) TARGET_MODEL="llama3.3:70b" ;;
+          66|deepseek-70b|r1-70b) TARGET_MODEL="deepseek-r1:70b" ;;
+          67|500b|beam*) TARGET_MODEL="deepseek-r1:671b" ;;
+          *) TARGET_MODEL="qwen2.5:72b" ;;
+        esac
+        ;;
       11) TARGET_MODEL="qwen2.5-coder:1.5b" ;;
       12) TARGET_MODEL="qwen2.5-coder:7b" ;;
       13) TARGET_MODEL="qwen2.5-coder:14b" ;;
@@ -3281,10 +3329,13 @@ cmd_big_catalog() {
       53) TARGET_MODEL="gemma2:27b" ;;
       54) TARGET_MODEL="phi3.5:3.8b" ;;
       55) TARGET_MODEL="phi4:14b" ;;
-      61|64|500b*) TARGET_MODEL="deepseek-r1:671b" ;;
-      62) TARGET_MODEL="mixtral:8x22b" ;;
-      63) TARGET_MODEL="command-r-plus:104b" ;;
-      65) TARGET_MODEL="qwen2.5:72b" ;;
+      61|deepseek-671b|671b) TARGET_MODEL="deepseek-r1:671b" ;;
+      62|mixtral|8x22b) TARGET_MODEL="mixtral:8x22b" ;;
+      63|command-r-plus|104b) TARGET_MODEL="command-r-plus:104b" ;;
+      64|72b|qwen-72b) TARGET_MODEL="qwen2.5:72b" ;;
+      65|llama-70b|70b) TARGET_MODEL="llama3.3:70b" ;;
+      66|deepseek-70b|r1-70b) TARGET_MODEL="deepseek-r1:70b" ;;
+      67|500b*|beam*) TARGET_MODEL="deepseek-r1:671b" ;;
       *)
         if [ -n "$clean_sub" ]; then
           TARGET_MODEL="$clean_sub"
@@ -3324,26 +3375,16 @@ EOF
     echo -e "${C_BOLD}┌── UNIVERSAL MODEL HUB: RUN BIG MODELS & MULTI-MODEL SWARMS ────────┐${C_RESET}"
     echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Real-time collaboration │${C_RESET}"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
-    echo -e "│  ${C_BOLD}[1]${C_RESET} ${C_GREEN}Flagship 32B AI${C_RESET} (~17GB VRAM • 100% on GPU • 0 RAM • 0 CPU)   │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream run 32b${C_RESET}                               │"
-    echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[2]${C_RESET} ${C_GREEN}Dual-Console Parallel Swarm${C_RESET} (Side-by-Side Consoles • Code File 1 & 2 Together)│"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream parallel qwen3:14b qwen2.5-coder:1.5b${C_RESET}│"
-    echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
-    echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[4]${C_RESET} ${C_RED}${C_BOLD}Mega Frontier & MoE Models${C_RESET} (500B MoE, 141B, 104B, 671B, 72B • <=48GB)│"
-    echo -e "│      → ${C_CYAN}beam:500b-25b${C_RESET} | ${C_CYAN}mixtral:8x22b${C_RESET} | ${C_CYAN}command-r-plus${C_RESET} | ${C_CYAN}deepseek-671b${C_RESET}│"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream run 500b | 8x22b | 104b | 671b | 72b${C_RESET} │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_CYAN}Custom Swarm Builder${C_RESET} (Pair ANY 2 Models Side-by-Side to Code 2 Files)   │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream parallel <m1> <m2>${C_RESET}                  │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Universal Model Hub Catalog${C_RESET} (Full Spec Table • All Free Models)│"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream models${C_RESET}                               │"
+    echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Universal Model Hub Catalog${C_RESET} (All Free Models & Frontier MoE)│"
+    echo -e "│      → Direct Command: ${C_CYAN}colistream models${C_RESET} (or type ${C_CYAN}mod 6${C_RESET})               │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow Card)  │"
+    echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow)    │"
     echo -e "│      → Direct Command: ${C_CYAN}colistream gpu <id|all>${C_RESET}                         │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[d]${C_RESET} ${C_YELLOW}Hardware & Speed Diagnostics${C_RESET} (Inspect GPU/CPU VRAM Splits)│"
@@ -3352,17 +3393,21 @@ EOF
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1-6, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [3, 5, 6, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       mod\ *|mode\ *|model\ *|models\ *|run\ *)
         local m_arg=$(echo "$CHOICE" | sed -E 's/^(mod|mode|model|models|run)[[:space:]]+//I')
-        cmd_run "$m_arg"
+        if [ "$m_arg" = "6" ]; then
+          cmd_big_catalog
+        else
+          cmd_run "$m_arg"
+        fi
         ;;
       mod|mods|models|model|catalog)
         cmd_big_catalog
         ;;
-      1)
+      1|32b)
         echo -e "\n${C_CYAN}[*] Launching Flagship 32B AI (100% GPU VRAM, 0 RAM, 0 CPU)...${C_RESET}"
         cmd_run "32b"
         ;;
@@ -3384,32 +3429,31 @@ EOF
             ;;
         esac
         ;;
-      4)
-        echo -e "\n${C_BOLD}${C_RED}┌── MEGA FRONTIER & MoE MODELS (Bigger than 72B • Max 48GB Budget) ───────┐${C_RESET}"
-        echo -e "│  ${C_BOLD}1)${C_RESET} qwen2.5:72b          | 72B  | Dense Frontier   | ~38–42 GB           │"
-        echo -e "│  ${C_BOLD}2)${C_RESET} mixtral:8x22b        | 141B | MoE (39B Active) | ~42 GB              │"
-        echo -e "│  ${C_BOLD}3)${C_RESET} command-r-plus:104b  | 104B | Dense Enterprise | ~40 GB              │"
-        echo -e "│  ${C_BOLD}4)${C_RESET} deepseek-r1:671b     | 671B | MoE (37B Active) | ~46 GB              │"
-        echo -e "│  ${C_BOLD}5)${C_RESET} llama3.3:70b         | 70B  | Dense Flagship   | ~40 GB              │"
-        echo -e "${C_BOLD}${C_RED}└─────────────────────────────────────────────────────────────────────────┘${C_RESET}"
-        read_input "${C_BOLD}Select model [1-5, or name, default 1]: ${C_RESET}" F_CHOICE
+      4|frontier|mega)
+        echo -e "\n${C_BOLD}${C_RED}─── MEGA FRONTIER & MoE MODELS (<=48GB Budget) ───${C_RESET}"
+        echo -e "  ${C_CYAN}61)${C_RESET} deepseek-r1:671b     (671B MoE 37B active • ~46 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}62)${C_RESET} mixtral:8x22b         (141B MoE 39B active • ~42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}63)${C_RESET} command-r-plus:104b   (104B Dense Enterprise • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}64)${C_RESET} qwen2.5:72b           (72B Dense Frontier • ~38–42 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}65)${C_RESET} llama3.3:70b          (70B Flagship GPT-4o • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}66)${C_RESET} deepseek-r1:70b       (70B Enterprise Reasoning • ~40 GB RAM/VRAM)"
+        echo -e "  ${C_CYAN}67)${C_RESET} beam:500b-25b         (501B MoE 25B active • ~44 GB RAM/VRAM)"
+        read_input "${C_BOLD}Select Mega Model [61-67, default 64]: ${C_RESET}" F_CHOICE
         case "$F_CHOICE" in
-          2|8x22b|mixtral) cmd_run "mixtral:8x22b" ;;
-          3|104b|command-r*) cmd_run "command-r-plus:104b" ;;
-          4|671b|deepseek*|500b*|beam*) cmd_run "deepseek-r1:671b" ;;
-          5|70b|llama*) cmd_run "llama3.3:70b" ;;
+          61|671b|deepseek*) cmd_run "deepseek-r1:671b" ;;
+          62|8x22b|mixtral) cmd_run "mixtral:8x22b" ;;
+          63|104b|command-r*) cmd_run "command-r-plus:104b" ;;
+          65|70b|llama*) cmd_run "llama3.3:70b" ;;
+          66|deepseek-70b) cmd_run "deepseek-r1:70b" ;;
+          67|500b*|beam*) cmd_run "deepseek-r1:671b" ;;
           *) cmd_run "qwen2.5:72b" ;;
         esac
         ;;
-      5)
+      5|s|S|swarm|builder)
         cmd_swarm_builder
         ;;
-      6)
-        cmd_models_table
-        read_input "${C_BOLD}Press Enter to return to menu or enter model name to run: ${C_RESET}" SEL_M
-        if [ -n "$SEL_M" ]; then
-          cmd_run "$SEL_M"
-        fi
+      6|table)
+        cmd_big_catalog
         ;;
       7)
         cmd_big_catalog
@@ -3425,7 +3469,7 @@ EOF
         cmd_turbo
         read_input "Press Enter to return to menu: " _
         ;;
-      s|S|share|web)
+      share|web)
         bash "${DIR}/share.sh"
         ;;
       q|Q|exit)
@@ -3434,7 +3478,7 @@ EOF
         ;;
       *)
         if [ -n "$CHOICE" ]; then
-          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1-6, g, d, t, s, or q.${C_RESET}"
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 3, 5, 6, g, d, or q.${C_RESET}"
           sleep 1
         fi
         ;;
@@ -3475,7 +3519,7 @@ case "$1" in
       cmd_big_catalog
     fi
     ;;
-  1|2|3|4|5|6|11|12|13|14|15|16|21|22|23|24|25|26|31|32|33|34|41|42|43|44|51|52|53|54|55|61|62|63|64|65|32b|72b|14b|7b|1.5b)
+  1|2|3|4|5|6|11|12|13|14|15|16|21|22|23|24|25|26|31|32|33|34|41|42|43|44|51|52|53|54|55|61|62|63|64|65|66|67|32b|72b|14b|7b|1.5b|671b|8x22b|104b|500b)
     cmd_run "$1"
     ;;
   list|ls)
