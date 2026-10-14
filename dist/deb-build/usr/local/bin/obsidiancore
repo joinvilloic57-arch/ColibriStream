@@ -3663,9 +3663,6 @@ EOF
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}Universal Model Hub Catalog${C_RESET} (All Free Models & Frontier MoE)│"
     echo -e "│      → Direct Command: ${C_CYAN}obsidiancore models${C_RESET} (or type ${C_CYAN}mod 3${C_RESET})               │"
     echo -e "│                                                                   │"
-    echo -e "│  ${C_BOLD}[c]${C_RESET} ${C_WHITE}Gemini/OpenCode Desktop Chat${C_RESET} (Autonomous Pair Programmer)   │"
-    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore chat${C_RESET}                                 │"
-    echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow)    │"
     echo -e "│      → Direct Command: ${C_CYAN}obsidiancore gpu <id|all>${C_RESET}                         │"
     echo -e "│                                                                   │"
@@ -3675,7 +3672,7 @@ EOF
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    read_input "${C_BOLD}Choose an option [1, 2, 3, c, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
+    read_input "${C_BOLD}Choose an option [1, 2, 3, g, d] (or 'q' to exit): ${C_RESET}" CHOICE
 
     case "$CHOICE" in
       mod\ *|mode\ *|model\ *|models\ *|run\ *)
@@ -3757,7 +3754,7 @@ EOF
         ;;
       *)
         if [ -n "$CHOICE" ]; then
-          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1, 2, 3, c, g, d, or q.${C_RESET}"
+          echo -e "${C_YELLOW}Invalid choice '${CHOICE}'. Select 1, 2, 3, g, d, or q.${C_RESET}"
           sleep 1
         fi
         ;;
