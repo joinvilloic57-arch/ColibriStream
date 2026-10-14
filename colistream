@@ -3695,7 +3695,7 @@ EOF
         ;;
       c|C|chat)
         echo -e "\n${C_CYAN}[*] Launching Gemini/OpenCode Desktop Pair Programmer...${C_RESET}"
-        cmd_run "32b"
+        cmd_run "chat"
         ;;
       1|moe|swarm|3)
         echo -e "\n${C_BOLD}${C_CYAN}─── [1] DUAL-AI SWARM & REASONING PAIR ───${C_RESET}"
@@ -3819,11 +3819,11 @@ case "$1" in
   diag|doctor)
     cmd_diag
     ;;
-  menu)
+  menu|"")
     cmd_loop_menu
     ;;
-  chat|"")
-    cmd_run "chat"
+  chat)
+    cmd_run "${2:-chat}"
     ;;
   *)
     echo -e "${C_BOLD}Usage:${C_RESET} obsidiancore [chat|menu|1|2|3|models|run <model>|parallel [m1] [m2]|swarm [m1] [m2]|debate [m1] [m2]|share|diag|gpu [id]|list]"
