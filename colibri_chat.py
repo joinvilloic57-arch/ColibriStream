@@ -561,6 +561,68 @@ def unload_model_from_memory(model_name, api_base="http://localhost:11434"):
     except Exception:
         return False
 
+_LAST_ACTIVITY_TIME = time.time()
+_ACTIVE_LOADED_MODEL = None
+_IDLE_THREAD_STARTED = False
+
+def parse_idle_seconds(val):
+    v = str(val).strip().lower()
+    if v in ("off", "never", "none", "-1"):
+        return None
+    if v.endswith("m"):
+        try: return float(v[:-1]) * 60
+        except: return 120
+    if v.endswith("s"):
+        try: return float(v[:-1])
+        except: return 60
+    if v.endswith("h"):
+        try: return float(v[:-1]) * 3600
+        except: return 3600
+    try:
+        return float(v) * 60
+    except:
+        return 120
+
+def start_idle_watchdog():
+    global _IDLE_THREAD_STARTED
+    if _IDLE_THREAD_STARTED:
+        return
+    _IDLE_THREAD_STARTED = True
+
+    def _worker():
+        global _LAST_ACTIVITY_TIME, _ACTIVE_LOADED_MODEL
+        while True:
+            time.sleep(5)
+            timeout_str = get_idle_timeout()
+            timeout_secs = parse_idle_seconds(timeout_str)
+            if timeout_secs is None:
+                continue
+            if _ACTIVE_LOADED_MODEL and (time.time() - _LAST_ACTIVITY_TIME >= timeout_secs):
+                m_to_unload = _ACTIVE_LOADED_MODEL
+                _ACTIVE_LOADED_MODEL = None
+                unload_model_from_memory(m_to_unload)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+def get_installed_models(api_base="http://localhost:11434"):
+    try:
+        with urllib.request.urlopen(f"{api_base}/api/tags", timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            return [m.get("name", "") for m in data.get("models", [])]
+    except Exception:
+        return []
+
+def get_best_default_model():
+    installed = get_installed_models()
+    for cand in ["qwen2.5-coder:7b", "qwen3:14b", "qwen2.5-coder:1.5b", "llama3.1:8b", "qwen2.5-coder:32b-instruct-q3_K_M"]:
+        for inst in installed:
+            if cand in inst or inst.startswith(cand.split(":")[0]):
+                return inst
+    if installed:
+        return installed[0]
+    return "qwen2.5-coder:7b"
+
 def evict_stale_models(current_model, api_base="http://localhost:11434"):
     """
     On memory-constrained systems (especially macOS Unified Memory),
@@ -1659,72 +1721,49 @@ def run_parallel_swarm_session(model1_name, model2_name):
         is_m2_giant = any(x in m2_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
         is_dual_70b = is_m1_giant and is_m2_giant
 
-        # Render user prompt in TUI card
+        # Mode selection: Collaborative Communication Pipeline (default) vs Concurrent
+        # In Collaborative Pipeline: Model 1 designs -> passes output to Model 2 -> Model 2 implements.
+        # Memory is strictly budgeted: only 1 model in VRAM at a time on constrained devices!
         print("\n" + render_tui_card("👤 Dual Swarm Task", prompt, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
 
-        th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b, api_base), daemon=True)
-        th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b, api_base), daemon=True)
-        th1.start()
-        th2.start()
+        # PHASE 1: Model 1 (Lead Systems Architect)
+        print(f"\n{C_BOLD}{C_GREEN}╭── 🧠 Phase 1: Lead Architect [{model1}] Analyzing & Designing ──╮{C_RESET}")
+        resp1, spd1, tok1, ptok1, dur1 = stream_chat(model1, m1_messages, color=C_GREEN, api_url=f"{api_base}/api/chat")
+        print(f"\n{C_DIM}└─ [Phase 1 Complete: {tok1} tokens • {spd1:.1f} tok/s • {dur1:.1f}s]{C_RESET}")
 
-        start_time = time.time()
-        spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        sp_idx = 0
-        try:
-            sys.stdout.write("\033[?25l")
-            while not (done1.is_set() and done2.is_set()):
-                sp = spinner_chars[sp_idx % len(spinner_chars)]
-                sp_idx += 1
-                tok1 = t1_stats.get("tokens", 0)
-                tok2 = t2_stats.get("tokens", 0)
-                spd1 = t1_stats.get("speed", 0.0)
-                spd2 = t2_stats.get("speed", 0.0)
+        # Evict Model 1 if on low-RAM hardware before Model 2 begins
+        if sys.platform == "darwin" or get_visible_vram_mb() < 24000:
+            evict_stale_models(model2, api_base=api_base)
 
-                s1_text = f"{C_GREEN}DONE ({tok1} tok){C_RESET}" if done1.is_set() else (
-                    f"{C_CYAN}{tok1} tok ({spd1:.1f} t/s){C_RESET}" if tok1 > 0 else f"{C_YELLOW}generating...{C_RESET}"
-                )
-                s2_text = f"{C_GREEN}DONE ({tok2} tok){C_RESET}" if done2.is_set() else (
-                    f"{C_PURPLE}{tok2} tok ({spd2:.1f} t/s){C_RESET}" if tok2 > 0 else f"{C_YELLOW}generating...{C_RESET}"
-                )
+        # PHASE 2: Model 2 (Implementation Specialist) - Injects Model 1's architecture into context!
+        print(f"\n{C_BOLD}{C_CYAN}╭── 🔍 Phase 2: Senior Implementation [{model2}] Synthesizing Code ──╮{C_RESET}")
+        m2_swarm_prompt = (
+            f"User Request: {prompt}\n\n"
+            f"--- Architect Proposal ({model1}) ---\n"
+            f"{resp1}\n"
+            f"-----------------------------------------\n"
+            f"Review the Architect's proposal above and synthesize the complete production code. "
+            f"Tag code blocks with ```write:<filename> or surgical ```edit:<filename> blocks so ObsidianCore auto-saves them to disk."
+        )
+        m2_messages = [{"role": "system", "content": m2_sys + ctx_inject}] + list(m2_history) + [
+            {"role": "user", "content": m2_swarm_prompt}
+        ]
+        resp2, spd2, tok2, ptok2, dur2 = stream_chat(model2, m2_messages, color=C_CYAN, api_url=f"{api_base}/api/chat")
+        print(f"\n{C_DIM}└─ [Phase 2 Complete: {tok2} tokens • {spd2:.1f} tok/s • {dur2:.1f}s]{C_RESET}")
 
-                elapsed = time.time() - start_time
-                line = f"  {C_YELLOW}{sp}{C_RESET} 🧠 M1 [{model1}]: {s1_text}  │  🔍 M2 [{model2}]: {s2_text}  ({elapsed:.1f}s)"
-                sys.stdout.write(f"\r\033[K{line}")
-                sys.stdout.flush()
-                time.sleep(0.08)
+        t1_text = [resp1]
+        t2_text = [resp2]
+        t1_stats = {"tokens": tok1, "speed": spd1}
+        t2_stats = {"tokens": tok2, "speed": spd2}
 
-            th1.join()
-            th2.join()
-            sys.stdout.write("\r\033[K")
-            sys.stdout.flush()
-        except KeyboardInterrupt:
-            done1.set()
-            done2.set()
-            sys.stdout.write("\033[?25h\033[0m\n")
-            sys.stdout.flush()
-            print(f"\n{C_YELLOW}[!] Interrupted by user.{C_RESET}")
-            continue
-        finally:
-            sys.stdout.write("\033[?25h\033[0m")
-            sys.stdout.flush()
-
-        tok1 = t1_stats.get("tokens", 0)
-        tok2 = t2_stats.get("tokens", 0)
-        spd1 = t1_stats.get("speed", 0.0)
-        spd2 = t2_stats.get("speed", 0.0)
-
-        # CRITICAL FIX: PROMINENTLY RENDER BOTH MODEL RESPONSES IN DUAL TUI CARDS:
+        # Prominently render dual TUI summary cards
         m1_header = f"🧠 Model 1: Lead Architect [{model1} • {spd1:.1f} tok/s • {tok1} tokens]"
         m2_header = f"🔍 Model 2: Fast Copilot   [{model2} • {spd2:.1f} tok/s • {tok2} tokens]"
+        print("\n" + render_tui_card(m1_header, resp1.strip() or "[No output generated]", border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
+        print("\n" + render_tui_card(m2_header, resp2.strip() or "[No output generated]", border_color=C_CYAN, title_color=C_BOLD+C_CYAN))
 
-        resp1 = t1_text[0].strip() or "[No output generated]"
-        resp2 = t2_text[0].strip() or "[No output generated]"
-
-        print("\n" + render_tui_card(m1_header, resp1, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
-        print("\n" + render_tui_card(m2_header, resp2, border_color=C_CYAN, title_color=C_BOLD+C_CYAN))
-
-        last_solutions["1"] = t1_text[0]
-        last_solutions["2"] = t2_text[0]
+        last_solutions["1"] = resp1
+        last_solutions["2"] = resp2
 
         # ONLY auto-save code if user actually asked for code and not a general conversational query
         if is_coding_request and not is_conversational:
@@ -1983,15 +2022,17 @@ def run_chat_session(model_name):
     ok = ensure_model_installed(model_name)
     if not ok:
         print(f"\n{C_YELLOW}[!] Model '{model_name}' could not be loaded or download was cancelled.{C_RESET}")
-        print(f"{C_GREEN}[*] Falling back to installed flagship model: qwen3:14b{C_RESET}")
-        time.sleep(1)
-        model_name = "qwen3:14b"
+        fallback = get_best_default_model()
+        print(f"{C_GREEN}[*] Falling back to installed flagship model: {fallback}{C_RESET}")
+        time.sleep(0.5)
+        model_name = fallback
         ensure_model_installed(model_name)
     os.system("clear 2>/dev/null || true")
     m_lower = model_name.lower()
     is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
     is_70b = is_giant
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+    vram_mb = get_visible_vram_mb()
 
     print_tui_header(model_name)
 
@@ -2155,14 +2196,23 @@ def run_chat_session(model_name):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] in ("--swarm", "--debate", "swarm", "debate"):
-        m1 = sys.argv[2] if len(sys.argv) > 2 else "qwen3:14b"
-        m2 = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-coder:1.5b"
+        installed = get_installed_models()
+        default_m1 = "qwen3:14b" if any("qwen3" in x for x in installed) else get_best_default_model()
+        default_m2 = "qwen2.5-coder:7b" if any("coder:7b" in x for x in installed) else ("qwen2.5-coder:1.5b" if any("1.5b" in x for x in installed) else default_m1)
+        m1 = sys.argv[2] if len(sys.argv) > 2 else default_m1
+        m2 = sys.argv[3] if len(sys.argv) > 3 else default_m2
         rounds_arg = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else 2
         run_swarm_debate_session(m1, m2, rounds=rounds_arg)
     elif len(sys.argv) > 1 and sys.argv[1] in ("--parallel", "parallel", "-p"):
-        m1 = sys.argv[2] if len(sys.argv) > 2 else "qwen3:14b"
-        m2 = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-coder:1.5b"
+        installed = get_installed_models()
+        default_m1 = "qwen3:14b" if any("qwen3" in x for x in installed) else get_best_default_model()
+        default_m2 = "qwen2.5-coder:7b" if any("coder:7b" in x for x in installed) else ("qwen2.5-coder:1.5b" if any("1.5b" in x for x in installed) else default_m1)
+        m1 = sys.argv[2] if len(sys.argv) > 2 else default_m1
+        m2 = sys.argv[3] if len(sys.argv) > 3 else default_m2
         run_parallel_swarm_session(m1, m2)
     else:
-        model = sys.argv[1] if len(sys.argv) > 1 else "qwen2.5-coder:1.5b"
+        if len(sys.argv) > 1 and sys.argv[1] not in ("chat", ""):
+            model = sys.argv[1]
+        else:
+            model = get_best_default_model()
         run_chat_session(model)
