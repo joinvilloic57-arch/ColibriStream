@@ -1,4 +1,4 @@
-# Colibristream: Systems Architecture & Implementation Blueprint
+# ObsidianCore: Systems Architecture & Implementation Blueprint
 
 ```
    ______      ___ __          _      __                         
@@ -13,7 +13,7 @@
 
 ## 1. Executive Architecture & System Topology
 
-Colibristream is engineered as a zero-bloat, self-optimizing local AI runtime and management environment. It bridges the gap between consumer web onboarding and raw bare-metal hardware execution.
+ObsidianCore is engineered as a zero-bloat, self-optimizing local AI runtime and management environment. It bridges the gap between consumer web onboarding and raw bare-metal hardware execution.
 
 The system gathers granular hardware telemetry upon invocation, dynamically mutates its low-level memory access and compute kernels to fit the exact host topology, and exposes an unpaywalled catalog of open-weight models.
 
@@ -88,7 +88,7 @@ The web presence serves as an instant portal, deliberately avoiding bloated trac
 * **Theme**: Deep phosphor terminal aesthetic (`#0a0a0c` dark void, `#1a1a24` elevation, `#00ff88` matrix green / `#e0e0e0` high-contrast monospace typography).
 * **Bundle Budget**: `< 25 KB` total uncompressed footprint. Single HTML file with embedded critical CSS and vanilla ES6. Zero external CDN dependencies.
 * **Content Flow**:
-  1. **Hero**: Minimal animated terminal prompt demonstrating real-time capability (`$ colibristream boot`).
+  1. **Hero**: Minimal animated terminal prompt demonstrating real-time capability (`$ obsidiancore boot`).
   2. **Specs Grid**: Live interactive explanation of how bare-metal zero-copy execution operates.
   3. **Launch Command**: Prominent one-line terminal installer with auto-copy and keyboard navigation (`Tab` + `Enter` or `Ctrl+C`).
   4. **Direct Web Launch (WASM/xterm.js optional)**: In-browser WebAssembly demo fallback for users without immediate shell access.
@@ -96,32 +96,32 @@ The web presence serves as an instant portal, deliberately avoiding bloated trac
 #### 2. The Transition Mechanism
 * **Quick-Launch Command**:
   ```bash
-  curl -fsSL https://colibristream.run | bash
+  curl -fsSL https://obsidiancore.run | bash
   # or via native package managers:
-  cargo install colibristream
+  cargo install obsidiancore
   ```
 * **Desktop Protocol Handler**: Supports `colibri://launch` custom URI scheme registered by the desktop binary.
-* **Architecture-Aware Script (`colibristream.run`)**:
+* **Architecture-Aware Script (`obsidiancore.run`)**:
   * Detects OS (`Linux`, `macOS`, `Windows WSL`) and Architecture (`x86_64`, `aarch64`).
-  * Downloads pre-compiled statically linked binary (`musl` for Linux, universal binary for macOS) to `~/.local/bin/colibristream`.
+  * Downloads pre-compiled statically linked binary (`musl` for Linux, universal binary for macOS) to `~/.local/bin/obsidiancore`.
   * Instantly executes terminal initialization without requiring `sudo` privileges.
 
 ---
 
 ### Phase 2: The Terminal Interface & Auto-Hardware Scan
 
-When booted, Colibristream launches directly into a sleek TUI (Terminal User Interface) built with Rust (`ratatui` + `crossterm`), executing an instantaneous, asynchronous hardware probe before presenting the user interface.
+When booted, ObsidianCore launches directly into a sleek TUI (Terminal User Interface) built with Rust (`ratatui` + `crossterm`), executing an instantaneous, asynchronous hardware probe before presenting the user interface.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant CLI as Colibristream TUI
+    participant CLI as ObsidianCore TUI
     participant Probe as Telemetry Engine
     participant OS as Host OS / Kernel / sysfs
     participant HW as Hardware (NVMe / GPU / RAM)
 
-    User->>CLI: Launches colibristream
+    User->>CLI: Launches obsidiancore
     CLI->>Probe: Spawn non-blocking probe threads
     par CPU & Topology
         Probe->>OS: Query /proc/cpuinfo, cpuid, sysfs
@@ -150,7 +150,7 @@ sequenceDiagram
 
 ### Phase 3: The Universal Free Local Model Hub
 
-Colibristream delivers a curated catalog of open-weight models, categorized side-by-side with commercial proprietary models, allowing users to run matched local replacements on bare metal without subscriptions or API keys.
+ObsidianCore delivers a curated catalog of open-weight models, categorized side-by-side with commercial proprietary models, allowing users to run matched local replacements on bare metal without subscriptions or API keys.
 
 #### Model Equivalence & Categorization Matrix
 
@@ -168,7 +168,7 @@ Colibristream delivers a curated catalog of open-weight models, categorized side
 ```
 
 #### Intra-Family Multi-Agent Swarm (Same-Family Dialogue)
-To enable collaborative intelligence without cross-model hallucinations, Colibristream starts with **Intra-Family Agent Communication** (models converse strictly with siblings in the same model lineage):
+To enable collaborative intelligence without cross-model hallucinations, ObsidianCore starts with **Intra-Family Agent Communication** (models converse strictly with siblings in the same model lineage):
 
 ```
        ┌────────────────────────────────────────────────────────┐
@@ -196,7 +196,7 @@ To enable collaborative intelligence without cross-model hallucinations, Colibri
 
 #### The Extreme-Scale Architecture: 72B to 2.4T Parameters at ~20 tok/s with Low System Footprint
 
-The ultimate ambition of Colibristream is running massive models (72B up to 2.4 Trillion parameters) across 1 or multiple GPU cards without exhausting system RAM, GPU VRAM, CPU cores, or NVMe bandwidth, while sustaining interactive generation speeds (~20 tokens/sec).
+The ultimate ambition of ObsidianCore is running massive models (72B up to 2.4 Trillion parameters) across 1 or multiple GPU cards without exhausting system RAM, GPU VRAM, CPU cores, or NVMe bandwidth, while sustaining interactive generation speeds (~20 tokens/sec).
 
 ```
    ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -218,23 +218,23 @@ The ultimate ambition of Colibristream is running massive models (72B up to 2.4 
    └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### How Colibristream Achieves This Without Crashing the Host System
+#### How ObsidianCore Achieves This Without Crashing the Host System
 
 1. **Sparse MoE Dynamic Routing (Top-K Expert Activation)**:
    * Frontier models at 671B–2.4T scale (e.g. DeepSeek-V3/R1 architecture) are **sparse**, not dense.
    * While the total model has 2.4T parameters, only a tiny subset (e.g. 8 out of 256 experts $\approx$ 37B active parameters) execute per token.
-   * Colibristream keeps shared attention weights and router layers permanently in memory, while streaming only the specific active experts on demand.
+   * ObsidianCore keeps shared attention weights and router layers permanently in memory, while streaming only the specific active experts on demand.
 
 2. **Predictive NVMe Expert Streaming via Ring Buffers (`io_uring` + DMA)**:
    * **The Bottleneck Solved**: Reading 2.4T parameters from disk every token would freeze the system.
    * **The Solution**: Layer $N$ predicts the router selections for Layer $N+1$ in advance.
-   * Using kernel `io_uring` asynchronous Direct I/O and GPU Direct Storage (GDS), Colibristream DMA-streams Layer $N+1$'s required expert weights from NVMe into a small pre-allocated 4GB–8GB GPU VRAM ring buffer *while* Layer $N$ is actively computing.
+   * Using kernel `io_uring` asynchronous Direct I/O and GPU Direct Storage (GDS), ObsidianCore DMA-streams Layer $N+1$'s required expert weights from NVMe into a small pre-allocated 4GB–8GB GPU VRAM ring buffer *while* Layer $N$ is actively computing.
    * **Result**: RAM and VRAM usage never exceeds 24GB–32GB, even when hosting a 2.4T model.
 
 3. **Multi-Agent Shared-Weight Deduplication (1 or Multiple Cards)**:
    * When multiple same-family agents communicate (e.g. Qwen Planner $\longleftrightarrow$ Qwen Worker):
    * **Shared Backbone Deduplication**: Sibling models share the identical base embedding tables, transformer attention projections, and vocabulary.
-   * Colibristream loads the shared base weights **once** into a globally mapped shared memory segment (`shm` / peer-to-peer PCIe BAR1 mapping across multiple GPUs).
+   * ObsidianCore loads the shared base weights **once** into a globally mapped shared memory segment (`shm` / peer-to-peer PCIe BAR1 mapping across multiple GPUs).
    * Multiple agents run concurrently on 1 card (via interleaved time-sliced scheduling) or partitioned across multiple cards (via Pipeline/Tensor Parallelism) with zero duplicate memory overhead.
 
 4. **Hardware Clamping & Host System Headroom Guardrails**:
@@ -304,7 +304,7 @@ flowchart TD
 ```
 
 #### 1. Dynamic SIMD Function Dispatch (Runtime Function Multiversioning)
-Instead of compiling a single lowest-common-denominator binary, Colibristream employs function pointer indirection initialized at boot time:
+Instead of compiling a single lowest-common-denominator binary, ObsidianCore employs function pointer indirection initialized at boot time:
 
 ```c
 // Dynamic kernel function signature for matrix-vector multiplication
@@ -353,7 +353,7 @@ void init_dynamic_kernels(const TelemetryProfile* profile) {
 * **Page-Aligned Allocation**: All intermediate activation buffers are allocated with `posix_memalign` aligned to 64-byte or 128-byte cache-line boundaries to prevent false sharing and unaligned SIMD load penalties.
 
 #### 3. Real-Time WebGPU/WebGL Visual Viewport
-* When enabled with `--viewport` or via the web transition, Colibristream activates an embedded lightweight WebSocket server (`axum` / `tokio-tungstenite`).
+* When enabled with `--viewport` or via the web transition, ObsidianCore activates an embedded lightweight WebSocket server (`axum` / `tokio-tungstenite`).
 * Streams raw telemetry buffers (layer compute latency, VRAM allocation map, token generation throughput) to a WebGPU frontend canvas for hardware pipeline inspection.
 
 ---
@@ -361,7 +361,7 @@ void init_dynamic_kernels(const TelemetryProfile* profile) {
 ## 3. Technology Stack & Monorepo Architecture
 
 ```
-colibristream/
+obsidiancore/
 ├── Cargo.toml                       # Root workspace definition
 ├── crates/
 │   ├── colibri-core/                # Low-level core engine: mmap, pointer math, SIMD kernels
@@ -415,7 +415,7 @@ colibristream/
 
 ```mermaid
 gantt
-    title Colibristream Implementation Timeline
+    title ObsidianCore Implementation Timeline
     dateFormat  YYYY-MM-DD
     section Phase 1: Web Gateway
     Minimal Landing Page & CSS         :2026-10-12, 5d
@@ -476,4 +476,4 @@ gantt
 3. **Memory Pressure & OS Out-Of-Memory (OOM) Killer**:
    * *Risk*: Loading large models without sufficient headroom triggers OS OOM killer.
    * *Mitigation*: The hardware score engine strictly enforces a safety headroom buffer (minimum 10% host memory retained for OS processes) before allowing a model configuration to mount.
-# ColibriStream
+# ObsidianCore

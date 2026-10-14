@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Colibristream — Bare-Metal CLI & Universal Model Hub
+# ObsidianCore — Bare-Metal CLI & Universal Model Hub
 # Telemetry scanner, 1-7 Model Hub, Big Catalog, and Copilot Desktop Chat
 # ==============================================================================
 
@@ -17,16 +17,22 @@ C_GRAY="\033[38;5;244m"
 C_WHITE="\033[38;5;255m"
 
 # Resolve Directory & Self-Install to User PATH
-DIR="${HOME}/.colistream"
+DIR="${HOME}/.obsidiancore"
+# Migrate legacy config if exists
+if [ -d "${HOME}/.colistream" ] && [ ! -d "${HOME}/.obsidiancore" ]; then
+  cp -r "${HOME}/.colistream" "${HOME}/.obsidiancore" 2>/dev/null || true
+fi
 mkdir -p "$DIR" "${HOME}/.local/bin"
 
-# If executed via curl | bash, save a copy to ~/.colistream/colistream
+# If executed via curl | bash, save a copy to ~/.local/bin/obsidiancore
 if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   CURRENT_FILE="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-  if [ -f "$CURRENT_FILE" ] && [ "$CURRENT_FILE" != "${HOME}/.local/bin/colistream" ]; then
-    cp "$CURRENT_FILE" "${HOME}/.local/bin/colistream" 2>/dev/null || true
-    chmod +x "${HOME}/.local/bin/colistream" 2>/dev/null || true
-    ln -sf "${HOME}/.local/bin/colistream" "${HOME}/.local/bin/colibristream" 2>/dev/null || true
+  if [ -f "$CURRENT_FILE" ] && [ "$CURRENT_FILE" != "${HOME}/.local/bin/obsidiancore" ]; then
+    cp "$CURRENT_FILE" "${HOME}/.local/bin/obsidiancore" 2>/dev/null || true
+    chmod +x "${HOME}/.local/bin/obsidiancore" 2>/dev/null || true
+    ln -sf "${HOME}/.local/bin/obsidiancore" "${HOME}/.local/bin/colistream" 2>/dev/null || true
+    ln -sf "${HOME}/.local/bin/obsidiancore" "${HOME}/.local/bin/colibristream" 2>/dev/null || true
+    ln -sf "${HOME}/.local/bin/obsidiancore" "${HOME}/.local/bin/colibri" 2>/dev/null || true
   fi
 fi
 
@@ -63,8 +69,8 @@ ensure_backend() {
 
   # Auto-bind to active fast GPU
   if [ -z "$ACTIVE_GPU" ]; then
-    if [ -f "${HOME}/.colistream/gpu_config" ]; then
-      ACTIVE_GPU=$(cat "${HOME}/.colistream/gpu_config" 2>/dev/null | tr -d '[:space:]')
+    if [ -f "${HOME}/.obsidiancore/gpu_config" ]; then
+      ACTIVE_GPU=$(cat "${HOME}/.obsidiancore/gpu_config" 2>/dev/null | tr -d '[:space:]')
     fi
   fi
   if [ -n "$ACTIVE_GPU" ] && [ "$ACTIVE_GPU" != "all" ]; then
@@ -80,7 +86,7 @@ ensure_backend() {
       env_cuda="Environment=\"CUDA_VISIBLE_DEVICES=${ACTIVE_GPU}\""
     fi
     mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
-    cat << SYSCONF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+    cat << SYSCONF > /etc/systemd/system/ollama.service.d/obsidiancore.conf 2>/dev/null || true
 [Service]
 ${env_cuda}
 Environment="OLLAMA_MAX_LOADED_MODELS=4"
@@ -233,8 +239,8 @@ run_hardware_scan() {
   fi
 
   # Determine Active GPU (Auto-Isolate Fast Card on Multi-GPU rigs)
-  GPU_CONFIG_FILE="${HOME}/.colistream/gpu_config"
-  mkdir -p "${HOME}/.colistream" 2>/dev/null || true
+  GPU_CONFIG_FILE="${HOME}/.obsidiancore/gpu_config"
+  mkdir -p "${HOME}/.obsidiancore" 2>/dev/null || true
   ACTIVE_GPU=""
   if [ -f "$GPU_CONFIG_FILE" ]; then
     ACTIVE_GPU=$(cat "$GPU_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
@@ -343,8 +349,8 @@ print_telemetry_box() {
 
 apply_gpu_configuration() {
   local target_gpu="$1"
-  mkdir -p "${HOME}/.colistream" 2>/dev/null || true
-  echo "$target_gpu" > "${HOME}/.colistream/gpu_config" 2>/dev/null || true
+  mkdir -p "${HOME}/.obsidiancore" 2>/dev/null || true
+  echo "$target_gpu" > "${HOME}/.obsidiancore/gpu_config" 2>/dev/null || true
 
   if [ "$target_gpu" = "all" ]; then
     unset CUDA_VISIBLE_DEVICES
@@ -362,7 +368,7 @@ apply_gpu_configuration() {
 
   if [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]; then
     mkdir -p /etc/systemd/system/ollama.service.d 2>/dev/null || true
-    cat << EOF > /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+    cat << EOF > /etc/systemd/system/ollama.service.d/obsidiancore.conf 2>/dev/null || true
 [Service]
 ${env_cuda}
 Environment="OLLAMA_MAX_LOADED_MODELS=4"
@@ -400,8 +406,8 @@ cmd_restart_engine() {
     if sudo -n true 2>/dev/null; then
       if [ "$target_gpu" = "all" ]; then
         sudo systemctl unset-environment CUDA_VISIBLE_DEVICES 2>/dev/null || true
-        if [ -f /etc/systemd/system/ollama.service.d/colistream.conf ]; then
-          sudo sed -i '/CUDA_VISIBLE_DEVICES/d' /etc/systemd/system/ollama.service.d/colistream.conf 2>/dev/null || true
+        if [ -f /etc/systemd/system/ollama.service.d/obsidiancore.conf ]; then
+          sudo sed -i '/CUDA_VISIBLE_DEVICES/d' /etc/systemd/system/ollama.service.d/obsidiancore.conf 2>/dev/null || true
           sudo systemctl daemon-reload 2>/dev/null || true
         fi
       else
@@ -431,7 +437,7 @@ cmd_restart_engine() {
 
 cmd_turbo() {
   echo -e "\n${C_BOLD}╔════════════════════════════════════════════════════════════════════╗${C_RESET}"
-  echo -e "${C_BOLD}║           ⚡ COLIBRISTREAM TURBO ACCELERATION ENGINE               ║${C_RESET}"
+  echo -e "${C_BOLD}║           ⚡ OBSIDIANCORE TURBO ACCELERATION ENGINE                ║${C_RESET}"
   echo -e "${C_BOLD}╚════════════════════════════════════════════════════════════════════╝${C_RESET}\n"
 
   echo -e "${C_CYAN}[1/4] Optimizing GPU Memory & Clocks (Zero Downclocking)...${C_RESET}"
@@ -468,9 +474,9 @@ cmd_turbo() {
 
   echo -e "\n${C_CYAN}[4/4] Fast 32B Model Recommendations:${C_RESET}"
   echo -e "  To get ${C_GREEN}${C_BOLD}~18–22 tok/s${C_RESET} on 32B instead of 12 tok/s, use the ${C_BOLD}Q3_K_M${C_RESET} quantization:"
-  echo -e "  👉 ${C_CYAN}colistream run qwen2.5-coder:32b-instruct-q3_K_M${C_RESET} (15 GB vs 20 GB)"
+  echo -e "  👉 ${C_CYAN}obsidiancore run qwen2.5-coder:32b-instruct-q3_K_M${C_RESET} (15 GB vs 20 GB)"
   echo -e "  To get ${C_GREEN}${C_BOLD}~40–50 tok/s${C_RESET} right now, use the 7B tier:"
-  echo -e "  👉 ${C_CYAN}colistream run qwen2.5-coder:7b${C_RESET}\n"
+  echo -e "  👉 ${C_CYAN}obsidiancore run qwen2.5-coder:7b${C_RESET}\n"
 
   echo -e "${C_GREEN}✔ Turbo boost configuration applied successfully!${C_RESET}\n"
 }
@@ -548,7 +554,7 @@ try:
     data = json.load(sys.stdin)
     models = data.get("models", [])
     if not models:
-        print("│  No local models installed yet. Pull one with: colistream pull <name>  │")
+        print("│  No local models installed yet. Pull one with: obsidiancore pull <name>  │")
     for m in models:
         name = m.get("name", "unknown")
         size_gb = m.get("size", 0) / (1024**3)
@@ -562,7 +568,7 @@ except Exception as e:
 
 cmd_diag() {
   ensure_backend
-  echo -e "\n${C_BOLD}${C_GREEN}┌── COLIBRISTREAM HARDWARE & INFERENCE DIAGNOSTICS ──────────────────┐${C_RESET}"
+  echo -e "\n${C_BOLD}${C_GREEN}┌── OBSIDIANCORE HARDWARE & INFERENCE DIAGNOSTICS ───────────────────┐${C_RESET}"
   echo -e "│ ${C_BOLD}Active GPU Config${C_RESET} : ${ACTIVE_GPU:-0} (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all})"
   echo -e "├───────────────────────────────────────────────────────────────────┤"
   echo -e "│ ${C_BOLD}NVIDIA GPU Hardware Details:${C_RESET}"
@@ -596,7 +602,7 @@ try:
             if pct_cpu > 0:
                 print('│     \033[38;5;220m[!] BOTTLENECK DETECTED:\033[0m Model is split across CPU/RAM!')
                 print('│         Host RAM transfer caps speed to ~0.06 - 1.0 tok/s.')
-                print('│         \033[38;5;48m✔ FIX:\033[0m Run 32B for 100% GPU acceleration @ 20-25+ tok/s: colistream run 32b')
+                print('│         \033[38;5;48m✔ FIX:\033[0m Run 32B for 100% GPU acceleration @ 20-25+ tok/s: obsidiancore run 32b')
             else:
                 print('│     \033[38;5;48m✔ 100% GPU ACCELERATED (0 RAM / 0 CPU)\033[0m')
 except Exception as e:
@@ -609,7 +615,7 @@ cmd_pull() {
   ensure_backend
   local model="$1"
   if [ -z "$model" ]; then
-    echo -e "${C_RED}[ERROR] Specify a model name. Example: colistream pull qwen2.5-coder:7b${C_RESET}"
+    echo -e "${C_RED}[ERROR] Specify a model name. Example: obsidiancore pull qwen2.5-coder:7b${C_RESET}"
     exit 1
   fi
   case "$model" in
@@ -691,7 +697,7 @@ write_inline_chat_script() {
   cat << 'PYEOF' > "$target"
 #!/usr/bin/env python3
 """
-Colibristream — Interactive Desktop AI Chat Engine (Copilot / Gemini Style)
+ObsidianCore — Interactive Desktop AI Chat Engine (Copilot / Gemini TUI)
 Features: Real-time token streaming, multi-turn history, /commands, syntax highlighting.
 """
 
@@ -858,7 +864,7 @@ def print_models_catalog_table():
     print(f"{C_DIM}★ All models run 100% locally on bare metal without cloud subscriptions or API keys.{C_RESET}\n")
 
 def print_coding_agent_help():
-    print(f"\n{C_BOLD}{C_GREEN}┌── COLIBRISTREAM AUTONOMOUS CODING AGENT COMMANDS ────────────────┐{C_RESET}")
+    print(f"\n{C_BOLD}{C_GREEN}┌── OBSIDIANCORE AUTONOMOUS CODING AGENT COMMANDS ────────────────┐{C_RESET}")
     print(f"│ {C_YELLOW}/models{C_RESET}          : Display Universal Free Local Model Hub Catalog        │")
     print(f"│ {C_YELLOW}/add <file|glob>{C_RESET} : Add files to agent context (e.g. /add main.py or *.py) │")
     print(f"│ {C_YELLOW}/drop <file>{C_RESET}     : Remove file from agent context                        │")
@@ -883,7 +889,7 @@ def print_coding_agent_help():
 def build_system_prompt():
     cwd = os.getcwd()
     sys_prompt = [
-        "You are an expert autonomous software engineer and local pair programmer running via Colibristream.",
+        "You are an expert autonomous software engineer and local pair programmer running via ObsidianCore.",
         f"Workspace root directory: {cwd}",
         "You have full authority to inspect, create, and modify code files directly on disk.",
         "",
@@ -1202,8 +1208,20 @@ def resolve_model_name(name):
         return "qwen2.5-coder:7b"
     return n
 
+def get_config_dir():
+    d = os.path.expanduser("~/.obsidiancore")
+    old_d = os.path.expanduser("~/.colistream")
+    if not os.path.exists(d):
+        if os.path.exists(old_d):
+            try:
+                shutil.copytree(old_d, d)
+            except Exception:
+                pass
+        os.makedirs(d, exist_ok=True)
+    return d
+
 def get_idle_timeout():
-    cfg = os.path.expanduser("~/.colistream/idle_config")
+    cfg = os.path.join(get_config_dir(), "idle_config")
     if os.path.exists(cfg):
         try:
             with open(cfg, "r") as f:
@@ -1218,7 +1236,7 @@ def set_idle_timeout(val):
     val = val.strip().lower()
     if val in ("off", "never", "disable", "none", "-1"):
         val = "never"
-    cfg = os.path.expanduser("~/.colistream/idle_config")
+    cfg = os.path.join(get_config_dir(), "idle_config")
     try:
         os.makedirs(os.path.dirname(cfg), exist_ok=True)
         with open(cfg, "w") as f:
@@ -1244,7 +1262,7 @@ def get_gpu_telemetry():
     Accurately detects real NVIDIA GPUs using nvidia-smi or ROCm using rocm-smi.
     Returns (0, 0, 0, False) on CPU-only machines.
     """
-    cfg_file = os.path.expanduser("~/.colistream/gpu_config")
+    cfg_file = os.path.join(get_config_dir(), "gpu_config")
     active_gpu = os.environ.get("ACTIVE_GPU", "").strip() or None
     if not active_gpu and os.path.exists(cfg_file):
         try:
@@ -1397,7 +1415,7 @@ def ensure_model_installed(model_name):
         free_gb = free_bytes / (1024 ** 3)
         if free_gb < 15.0:
             print(f"\n{C_RED}[!] Low Storage Alert: Only {free_gb:.1f} GB free on {target_dir}.{C_RESET}")
-            print(f"{C_YELLOW}[!] ColibriStream enforces a 15 GB safety buffer to protect system stability.{C_RESET}")
+            print(f"{C_YELLOW}[!] ObsidianCore enforces a 15 GB safety buffer to protect system stability.{C_RESET}")
             ans = input(f"{C_BOLD}Continue downloading '{model_name}' anyway? [y/N]: {C_RESET}").strip().lower()
             if ans not in ("y", "yes"):
                 print(f"{C_YELLOW}[*] Download cancelled to protect disk space.{C_RESET}")
@@ -1691,9 +1709,120 @@ def pad_truncate(s, width, color=C_WHITE):
     pad = " " * max(0, width - cur_w)
     return f"{color}{''.join(res)}{C_RESET}{pad}"
 
+def wrap_text_to_width(text, max_width):
+    lines = []
+    for raw_line in text.split("\n"):
+        if not raw_line:
+            lines.append("")
+            continue
+        cur_line = []
+        cur_w = 0
+        words = raw_line.split(" ")
+        for i, word in enumerate(words):
+            ww = disp_width(word)
+            space_w = 1 if i > 0 else 0
+            if cur_w + space_w + ww <= max_width:
+                if i > 0:
+                    cur_line.append(" ")
+                    cur_w += 1
+                cur_line.append(word)
+                cur_w += ww
+            else:
+                if cur_line:
+                    lines.append("".join(cur_line))
+                cur_line = [word]
+                cur_w = ww
+        if cur_line:
+            lines.append("".join(cur_line))
+    return lines
+
+def render_tui_card(title, body, border_color=C_CYAN, title_color=C_BOLD+C_WHITE, max_card_width=None):
+    cols = shutil.get_terminal_size((80, 24)).columns
+    card_width = min(cols - 2, max_card_width or (cols - 2))
+    card_width = max(35, card_width)
+    inner_width = card_width - 4
+
+    clean_title = strip_ansi(title)
+    title_disp_w = disp_width(clean_title)
+    avail_dashes = max(2, card_width - 3 - title_disp_w - 2)
+    top_line = f"{border_color}╭─ {title_color}{title}{C_RESET}{border_color} {'─' * avail_dashes}╮{C_RESET}"
+
+    out_lines = [top_line]
+    wrapped_lines = wrap_text_to_width(body, inner_width)
+    for l in wrapped_lines:
+        line_w = disp_width(l)
+        pad = " " * max(0, inner_width - line_w)
+        out_lines.append(f"{border_color}│{C_RESET} {l}{pad} {border_color}│{C_RESET}")
+
+    bottom_line = f"{border_color}╰{'─' * (card_width - 2)}╯{C_RESET}"
+    out_lines.append(bottom_line)
+    return "\n".join(out_lines)
+
+def print_tui_header(model_name):
+    cols = shutil.get_terminal_size((80, 24)).columns
+    box_w = max(40, min(cols - 2, 86))
+    inner_w = box_w - 4
+
+    m_lower = model_name.lower()
+    is_giant = any(x in m_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "beam"])
+    is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
+    vram_mb = get_visible_vram_mb()
+    
+    if vram_mb == 0:
+        mem_str = "High-RAM Mode (Host Memory)"
+    elif is_32b:
+        mem_str = "Strictly 17 GB VRAM (100% GPU • 0 RAM)"
+    elif is_giant:
+        mem_str = "Multi-GPU Pool (Capped <=48GB VRAM)" if vram_mb >= 44000 else "Partial VRAM Offload (GPU+RAM)"
+    else:
+        mem_str = "100% GPU VRAM Native Acceleration"
+
+    idle_val = get_idle_timeout()
+    idle_str = f"Sleep: {idle_val} (Auto-Free)" if idle_val != "never" else "Sleep: Disabled"
+
+    dashes = max(2, box_w - 38)
+    top = f"{C_CYAN}╭── {C_BOLD}{C_WHITE}💎 ObsidianCore Interactive TUI{C_RESET}{C_CYAN} " + "─" * dashes + f"╮{C_RESET}"
+    line1 = f"  {C_BOLD}Model:{C_RESET} {C_GREEN}{model_name}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}"
+    line2 = f"  {C_BOLD}Memory:{C_RESET} {C_YELLOW}{mem_str}{C_RESET}  │  {C_CYAN}{idle_str}{C_RESET}"
+    line3 = f"  {C_BOLD}Workspace:{C_RESET} {C_WHITE}{os.getcwd()}{C_RESET}"
+    line4 = f"  {C_DIM}Commands: /model <name> | /swarm | /idle <time> | /sleep | /menu | /files | /exit{C_RESET}"
+    bottom = f"{C_CYAN}╰" + "─" * (box_w - 2) + f"╯{C_RESET}"
+
+    print(top)
+    for l in [line1, line2, line3, line4]:
+        lw = disp_width(l)
+        pad = " " * max(0, inner_w - lw)
+        print(f"{C_CYAN}│{C_RESET} {l}{pad} {C_CYAN}│{C_RESET}")
+    print(bottom)
+
+def print_swarm_tui_header(lead_model, fast_model):
+    cols = shutil.get_terminal_size((80, 24)).columns
+    box_w = max(40, min(cols - 2, 86))
+    inner_w = box_w - 4
+
+    dashes = max(2, box_w - 49)
+    top = f"{C_GREEN}╭── {C_BOLD}{C_WHITE}⚡ ObsidianCore Dual-AI Collaborative Swarm{C_RESET}{C_GREEN} " + "─" * dashes + f"╮{C_RESET}"
+    line1 = f"  {C_GREEN}{C_BOLD}• Model 1 (Lead Architect):{C_RESET} {C_WHITE}{lead_model}{C_RESET}"
+    line2 = f"  {C_CYAN}{C_BOLD}• Model 2 (Fast Copilot)  :{C_RESET} {C_WHITE}{fast_model}{C_RESET}"
+    line3 = f"  {C_YELLOW}• Mode:{C_RESET} Real-Time Concurrent Execution • Dual Streaming • Zero Paywalls"
+    line4 = f"  {C_DIM}Commands: /models | /1 <msg> | /2 <msg> | /assign <f1> <f2> | !cmd | /clear | /exit{C_RESET}"
+    bottom = f"{C_GREEN}╰" + "─" * (box_w - 2) + f"╯{C_RESET}"
+
+    print(top)
+    for l in [line1, line2, line3, line4]:
+        lw = disp_width(l)
+        pad = " " * max(0, inner_w - lw)
+        print(f"{C_GREEN}│{C_RESET} {l}{pad} {C_GREEN}│{C_RESET}")
+    print(bottom)
+
 def detect_swarm_file_targets(prompt):
-    tokens = re.findall(r'[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,6}', prompt)
-    valid_files = [t for t in tokens if not t.startswith(('http', 'www')) and not t.endswith(('.com', '.org', '.net', '.io'))]
+    p_low = prompt.lower().strip()
+    is_conv = any(p in p_low for p in ["hello", "hi", "hey", "who are you", "what are you", "help", "thanks", "thank you", "good morning", "good evening"]) and len(p_low.split()) <= 4
+    if is_conv:
+        return None, None
+
+    tokens = re.findall(r'\b[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,6}\b', prompt)
+    valid_files = [t for t in tokens if not t.startswith(('http', 'www')) and not t.endswith(('.com', '.org', '.net', '.io', '.html', '.md', '.txt'))]
     if len(valid_files) >= 2:
         return valid_files[0], valid_files[1]
     elif len(valid_files) == 1:
@@ -1702,35 +1831,34 @@ def detect_swarm_file_targets(prompt):
         base = f1.rsplit('.', 1)[0]
         return f1, f"{base}_worker.{ext}"
 
-    p_low = prompt.lower()
-    pairs = [
-        (('rust', 'server'), ('c', 'client'), ('server.rs', 'client.c')),
-        (('c', 'server'), ('rust', 'client'), ('server.c', 'client.rs')),
-        (('python', 'backend'), ('frontend', 'js'), ('backend.py', 'frontend.js')),
-        (('python', 'server'), ('client',), ('server.py', 'client.py')),
-        (('rust',), ('c',), ('server.rs', 'client.c')),
-        (('c',), ('assembly',), ('engine.c', 'kernel.s')),
-        (('asm',), ('c',), ('kernel.s', 'main.c')),
-        (('backend',), ('frontend',), ('backend.py', 'frontend.js')),
-        (('server',), ('client',), ('server.py', 'client.py')),
-        (('rust',), ('python',), ('core.rs', 'binding.py')),
-        (('html',), ('css',), ('index.html', 'style.css')),
-    ]
-    for c1, c2, (f1, f2) in pairs:
-        if all(w in p_low for w in c1) and all(w in p_low for w in c2):
-            return f1, f2
+    # Only infer file targets if there is explicit coding intent
+    has_code_intent = bool(re.search(r'\b(write|create|build|code|implement|generate|program|develop)\b', p_low))
+    if not has_code_intent:
+        return None, None
 
-    if 'rust' in p_low:
+    has_rust = bool(re.search(r'\brust\b', p_low))
+    has_c = bool(re.search(r'\b(c|c\+\+|cpp|clang)\b', p_low))
+    has_py = bool(re.search(r'\b(python|py)\b', p_low))
+    has_go = bool(re.search(r'\b(golang|go)\b', p_low))
+    has_web = bool(re.search(r'\b(frontend|html|css|js|react|vue)\b', p_low))
+
+    if has_rust and has_c:
         return 'server.rs', 'client.c'
-    if 'c' in p_low:
-        return 'server.c', 'client.c'
-    if 'python' in p_low or 'py' in p_low:
-        return 'server.py', 'client.py'
-    if 'go' in p_low:
-        return 'server.go', 'client.go'
-    if 'html' in p_low or 'web' in p_low:
-        return 'index.html', 'app.js'
-    return 'core_service.rs', 'worker_client.c'
+    if has_py and has_web:
+        return 'backend.py', 'frontend.js'
+    if has_rust and has_py:
+        return 'core.rs', 'binding.py'
+    if (has_c or has_rust or has_py or has_go) and ('server' in p_low or 'client' in p_low or 'dual' in p_low or 'side by side' in p_low):
+        if has_rust:
+            return 'server.rs', 'client.rs'
+        if has_c:
+            return 'server.c', 'client.c'
+        if has_py:
+            return 'server.py', 'client.py'
+        if has_go:
+            return 'server.go', 'client.go'
+
+    return None, None
 
 def sniff_file_from_code(text, default_name):
     m = re.search(r"```(?:write|create|file|[a-zA-Z0-9_\-]+)?\s*:?\s*([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,8})", text)
@@ -1836,78 +1964,10 @@ def stream_model_tokens_concurrent(model_name, messages, text_holder, stats_hold
 _PARALLEL_BACKEND_PROC = None
 
 def _cleanup_parallel_backend():
-    global _PARALLEL_BACKEND_PROC
-    if _PARALLEL_BACKEND_PROC is not None:
-        try:
-            _PARALLEL_BACKEND_PROC.terminate()
-            _PARALLEL_BACKEND_PROC.wait(timeout=2)
-        except Exception:
-            try:
-                _PARALLEL_BACKEND_PROC.kill()
-            except Exception:
-                pass
-        _PARALLEL_BACKEND_PROC = None
-
-atexit.register(_cleanup_parallel_backend)
+    pass
 
 def ensure_parallel_backend(model1, model2):
-    global _PARALLEL_BACKEND_PROC
-    target_port = 11435
-
-    def _warm_on_port(port, m):
-        try:
-            url = f"http://127.0.0.1:{port}/api/generate"
-            payload = {"model": resolve_model_name(m), "keep_alive": "30m"}
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                resp.read()
-            return True
-        except Exception:
-            return False
-
-    print(f"\n{C_CYAN}[*] Initializing dedicated multi-model engine (Port 11435: 4 Concurrent Slots)...{C_RESET}")
-    is_11435_alive = False
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{target_port}/api/tags", timeout=1) as resp:
-            is_11435_alive = (resp.status == 200)
-    except Exception:
-        is_11435_alive = False
-
-    if not is_11435_alive:
-        env = os.environ.copy()
-        env["OLLAMA_HOST"] = f"127.0.0.1:{target_port}"
-        if os.path.exists("/usr/share/ollama/.ollama/models"):
-            env["OLLAMA_MODELS"] = "/usr/share/ollama/.ollama/models"
-        env["OLLAMA_NOPRUNE"] = "true"
-        env["OLLAMA_MAX_LOADED_MODELS"] = "4"
-        env["OLLAMA_NUM_PARALLEL"] = "4"
-        env["OLLAMA_KEEP_ALIVE"] = "30m"
-        
-        ollama_bin = "/usr/local/bin/ollama" if os.path.exists("/usr/local/bin/ollama") else "ollama"
-        _PARALLEL_BACKEND_PROC = subprocess.Popen(
-            [ollama_bin, "serve"],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        for _ in range(30):
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{target_port}/api/tags", timeout=1) as resp:
-                    if resp.status == 200:
-                        break
-            except Exception:
-                time.sleep(0.3)
-
-    print(f"  • Pre-warming Model 1 ({model1}) and Model 2 ({model2}) in parallel...")
-    th_w1 = threading.Thread(target=_warm_on_port, args=(target_port, model1), daemon=True)
-    th_w2 = threading.Thread(target=_warm_on_port, args=(target_port, model2), daemon=True)
-    th_w1.start()
-    th_w2.start()
-    th_w1.join()
-    th_w2.join()
-    print(f"{C_GREEN}✔ Dedicated Multi-Model Engine Ready! Both models locked in memory simultaneously.{C_RESET}")
-    time.sleep(1)
-    return f"http://127.0.0.1:{target_port}"
+    return "http://127.0.0.1:11434"
 
 def run_parallel_swarm_session(model1_name, model2_name):
     model1 = resolve_model_name(model1_name)
@@ -1939,12 +1999,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
         lead_model, fast_model = model2, model1
 
     os.system("clear 2>/dev/null || true")
-    print(f"\n{C_GREEN}{C_BOLD}⚡ COLIBRISTREAM DUAL-AI ADAPTIVE SWARM{C_RESET}")
-    print(f"  {C_GREEN}• Lead Architect (Heavy Reasoning){C_RESET}: {C_WHITE}{C_BOLD}{lead_model}{C_RESET}")
-    print(f"  {C_CYAN}• Fast Copilot   (Quick Responses){C_RESET}: {C_WHITE}{C_BOLD}{fast_model}{C_RESET}")
-    print(f"  {C_YELLOW}• Adaptive Dispatch{C_RESET}: Fast answers for simple tasks • Deep compute on big model • Auto-handoff • Dual parallel code")
-    print(f"  {C_GRAY}• Commands: /models | /1 <msg> | /2 <msg> | /assign <f1> <f2> | !cmd | /diff | /clear | /exit{C_RESET}")
-    print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
+    print_swarm_tui_header(lead_model, fast_model)
 
     last_solutions = {"1": "", "2": ""}
     last_user_prompt = ""
@@ -1972,7 +2027,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
 
     while True:
         try:
-            prompt = input(f"\n{C_BOLD}{C_GREEN}Dual Swarm Task ❯ {C_RESET}").strip()
+            prompt = input(f"\n{C_BOLD}{C_GREEN}ObsidianCore Swarm ❯ {C_RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print(f"\n{C_DIM}Dual Swarm session ended.{C_RESET}")
             break
@@ -2078,7 +2133,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
         if prompt.startswith("/1 ") or prompt.startswith("/arch ") or prompt.startswith("/lead "):
             direct_q = prompt.split(maxsplit=1)[1].strip()
             print(f"\n{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}):{C_RESET}")
-            sys_m = f"You are {lead_model}, Lead Architect in Colibristream. Answer the user's question directly, accurately, and thoroughly."
+            sys_m = f"You are {lead_model}, Lead Architect in ObsidianCore. Answer the user's question directly, accurately, and thoroughly."
             msgs = [{"role": "system", "content": sys_m}] + list(m1_history) + [{"role": "user", "content": direct_q}]
             ans, _, _ = stream_chat(lead_model, msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
             m1_history.append({"role": "user", "content": direct_q})
@@ -2090,7 +2145,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
         if prompt.startswith("/2 ") or prompt.startswith("/fast ") or prompt.startswith("/worker "):
             direct_q = prompt.split(maxsplit=1)[1].strip()
             print(f"\n{C_CYAN}{C_BOLD}🔍 Fast Copilot ({fast_model}):{C_RESET}")
-            sys_m = f"You are {fast_model}, fast assistant in Colibristream. Answer the user's question directly, accurately, and concisely."
+            sys_m = f"You are {fast_model}, fast assistant in ObsidianCore. Answer the user's question directly, accurately, and concisely."
             msgs = [{"role": "system", "content": sys_m}] + list(m2_history) + [{"role": "user", "content": direct_q}]
             ans, _, _ = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
             m2_history.append({"role": "user", "content": direct_q})
@@ -2104,28 +2159,44 @@ def run_parallel_swarm_session(model1_name, model2_name):
         file1 = assigned_targets[0] or f1_cand
         file2 = assigned_targets[1] or f2_cand
 
+        is_conversational = any(p in prompt.lower().strip() for p in ["hello", "hi", "hey", "who are you", "what are you", "help", "thanks", "thank you", "good morning", "good evening"]) and len(prompt.split()) <= 4
+        is_coding_request = bool(file1 or file2 or any(k in prompt.lower() for k in ["code", "write", "file", "implement", "build", "create", "function", "class", "script", "app", "server", "client", "refactor", "module"])) and not is_conversational
+
         # Dual AI Inter-Communication Prompts:
-        # Lead Architect focuses on System Architecture & Core Interface
-        # Fast Coder focuses on Concrete Implementation & Functional Modules
-        m1_sys = (
-            f"You are Model 1 ({model1}) — Lead Systems Architect in an autonomous 2-AI concurrent swarm.\n"
-            f"You and Model 2 ({model2}) work simultaneously side-by-side on this user request.\n"
-            f"YOUR ROLE: Provide the system architecture, foundational data structures, interfaces, and primary component ('{file1}').\n"
-            f"Output clean production-grade code: ```write:{file1}\n"
-        )
-        m2_sys = (
-            f"You are Model 2 ({model2}) — Senior Implementation Engineer in an autonomous 2-AI concurrent swarm.\n"
-            f"You and Model 1 ({model1}) work simultaneously side-by-side on this user request.\n"
-            f"YOUR ROLE: Provide working implementation logic, helper functions, client integration, and complementary component ('{file2}').\n"
-            f"Output clean production-grade code: ```write:{file2}\n"
-        )
+        if is_coding_request and file1 and file2:
+            m1_sys = (
+                f"You are Model 1 ({model1}) — Lead Systems Architect in an autonomous 2-AI concurrent swarm running via ObsidianCore.\n"
+                f"You and Model 2 ({model2}) work simultaneously side-by-side on this user request.\n"
+                f"YOUR ROLE: Provide the system architecture, foundational data structures, interfaces, and primary component ('{file1}').\n"
+                f"Output clean production-grade code: ```write:{file1}\n"
+            )
+            m2_sys = (
+                f"You are Model 2 ({model2}) — Senior Implementation Engineer in an autonomous 2-AI concurrent swarm running via ObsidianCore.\n"
+                f"You and Model 1 ({model1}) work simultaneously side-by-side on this user request.\n"
+                f"YOUR ROLE: Provide working implementation logic, helper functions, client integration, and complementary component ('{file2}').\n"
+                f"Output clean production-grade code: ```write:{file2}\n"
+            )
+            m1_prompt = f"{prompt}\n[Collaborative Swarm: Focus on primary module '{file1}' while partner implements '{file2}']"
+            m2_prompt = f"{prompt}\n[Collaborative Swarm: Focus on complementary module '{file2}' interfacing with '{file1}']"
+        else:
+            m1_sys = (
+                f"You are Model 1 ({model1}) — Lead Systems Architect in an autonomous 2-AI collaborative swarm running via ObsidianCore.\n"
+                f"You and Model 2 ({model2}) work concurrently side-by-side. Answer the user clearly, thoroughly, and professionally."
+            )
+            m2_sys = (
+                f"You are Model 2 ({model2}) — Senior Fast Copilot & Implementation Specialist in an autonomous 2-AI collaborative swarm running via ObsidianCore.\n"
+                f"You and Model 1 ({model1}) work concurrently side-by-side. Answer the user with concise, practical insights and assistance."
+            )
+            m1_prompt = prompt
+            m2_prompt = prompt
+
         files_ctx = build_system_prompt() if tracked_files else ""
         ctx_inject = f"\n\nWorkspace Context:\n{files_ctx}" if files_ctx else ""
         m1_messages = [{"role": "system", "content": m1_sys + ctx_inject}] + list(m1_history) + [
-            {"role": "user", "content": f"{prompt}\n[Collaborative Swarm: Focus on primary module '{file1}' while partner implements '{file2}']"}
+            {"role": "user", "content": m1_prompt}
         ]
         m2_messages = [{"role": "system", "content": m2_sys + ctx_inject}] + list(m2_history) + [
-            {"role": "user", "content": f"{prompt}\n[Collaborative Swarm: Focus on complementary module '{file2}' interfacing with '{file1}']"}
+            {"role": "user", "content": m2_prompt}
         ]
 
         t1_text = [""]
@@ -2141,55 +2212,44 @@ def run_parallel_swarm_session(model1_name, model2_name):
         is_m2_giant = any(x in m2_lower for x in ["70b", "72b", "671b", "500b", "501b", "8x22b", "104b", "405b", "beam"])
         is_dual_70b = is_m1_giant and is_m2_giant
 
+        # Render user prompt in TUI card
+        print("\n" + render_tui_card("👤 Dual Swarm Task", prompt, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
+
         th1 = threading.Thread(target=stream_model_tokens_concurrent, args=(model1, m1_messages, t1_text, t1_stats, done1, is_dual_70b, api_base), daemon=True)
         th2 = threading.Thread(target=stream_model_tokens_concurrent, args=(model2, m2_messages, t2_text, t2_stats, done2, is_dual_70b, api_base), daemon=True)
         th1.start()
         th2.start()
 
-        print(f"\n{C_BOLD}{C_GREEN}⚡ Dual Swarm Generating ({model1} + {model2}):{C_RESET}")
-        print(f"  {C_CYAN}• Model 1{C_RESET} -> {C_BOLD}{file1}{C_RESET}")
-        print(f"  {C_PURPLE}• Model 2{C_RESET} -> {C_BOLD}{file2}{C_RESET}")
-        print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
-
         start_time = time.time()
+        spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        sp_idx = 0
         try:
             sys.stdout.write("\033[?25l")
             while not (done1.is_set() and done2.is_set()):
-                sniff1 = sniff_file_from_code(t1_text[0], file1)
-                sniff2 = sniff_file_from_code(t2_text[0], file2)
-
+                sp = spinner_chars[sp_idx % len(spinner_chars)]
+                sp_idx += 1
                 tok1 = t1_stats.get("tokens", 0)
                 tok2 = t2_stats.get("tokens", 0)
                 spd1 = t1_stats.get("speed", 0.0)
                 spd2 = t2_stats.get("speed", 0.0)
 
                 s1_text = f"{C_GREEN}DONE ({tok1} tok){C_RESET}" if done1.is_set() else (
-                    f"{C_CYAN}{tok1} tok ({spd1:.1f} t/s){C_RESET}" if tok1 > 0 else f"{C_YELLOW}evaluating prompt...{C_RESET}"
+                    f"{C_CYAN}{tok1} tok ({spd1:.1f} t/s){C_RESET}" if tok1 > 0 else f"{C_YELLOW}generating...{C_RESET}"
                 )
                 s2_text = f"{C_GREEN}DONE ({tok2} tok){C_RESET}" if done2.is_set() else (
-                    f"{C_PURPLE}{tok2} tok ({spd2:.1f} t/s){C_RESET}" if tok2 > 0 else f"{C_YELLOW}evaluating prompt...{C_RESET}"
+                    f"{C_PURPLE}{tok2} tok ({spd2:.1f} t/s){C_RESET}" if tok2 > 0 else f"{C_YELLOW}generating...{C_RESET}"
                 )
 
                 elapsed = time.time() - start_time
-                line = f"  🧠 M1 [{sniff1}]: {s1_text}  │  🔍 M2 [{sniff2}]: {s2_text}  ({elapsed:.1f}s)"
+                line = f"  {C_YELLOW}{sp}{C_RESET} 🧠 M1 [{model1}]: {s1_text}  │  🔍 M2 [{model2}]: {s2_text}  ({elapsed:.1f}s)"
                 sys.stdout.write(f"\r\033[K{line}")
                 sys.stdout.flush()
                 time.sleep(0.08)
 
             th1.join()
             th2.join()
-
             sys.stdout.write("\r\033[K")
-            sniff1 = sniff_file_from_code(t1_text[0], file1)
-            sniff2 = sniff_file_from_code(t2_text[0], file2)
-            tok1 = t1_stats.get("tokens", 0)
-            tok2 = t2_stats.get("tokens", 0)
-            spd1 = t1_stats.get("speed", 0.0)
-            spd2 = t2_stats.get("speed", 0.0)
-            total_dur = time.time() - start_time
-            print(f"  {C_GREEN}✔ Model 1 [{model1[:10]} -> {sniff1}]: {tok1} tokens ({spd1:.1f} t/s){C_RESET}")
-            print(f"  {C_GREEN}✔ Model 2 [{model2[:10]} -> {sniff2}]: {tok2} tokens ({spd2:.1f} t/s) in {total_dur:.1f}s{C_RESET}")
-            print(f"{C_GRAY}───────────────────────────────────────────────────────────────────────{C_RESET}")
+            sys.stdout.flush()
         except KeyboardInterrupt:
             done1.set()
             done2.set()
@@ -2201,29 +2261,47 @@ def run_parallel_swarm_session(model1_name, model2_name):
             sys.stdout.write("\033[?25h\033[0m")
             sys.stdout.flush()
 
+        tok1 = t1_stats.get("tokens", 0)
+        tok2 = t2_stats.get("tokens", 0)
+        spd1 = t1_stats.get("speed", 0.0)
+        spd2 = t2_stats.get("speed", 0.0)
+
+        # CRITICAL FIX: PROMINENTLY RENDER BOTH MODEL RESPONSES IN DUAL TUI CARDS:
+        m1_header = f"🧠 Model 1: Lead Architect [{model1} • {spd1:.1f} tok/s • {tok1} tokens]"
+        m2_header = f"🔍 Model 2: Fast Copilot   [{model2} • {spd2:.1f} tok/s • {tok2} tokens]"
+
+        resp1 = t1_text[0].strip() or "[No output generated]"
+        resp2 = t2_text[0].strip() or "[No output generated]"
+
+        print("\n" + render_tui_card(m1_header, resp1, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
+        print("\n" + render_tui_card(m2_header, resp2, border_color=C_CYAN, title_color=C_BOLD+C_CYAN))
+
         last_solutions["1"] = t1_text[0]
         last_solutions["2"] = t2_text[0]
 
-        saved1 = apply_model_edits(t1_text[0], explicit_filename=sniff1, user_prompt=prompt)
-        saved2 = apply_model_edits(t2_text[0], explicit_filename=sniff2, user_prompt=prompt)
-        file1_saved = saved1[0] if saved1 else sniff1
-        file2_saved = saved2[0] if saved2 else sniff2
+        # ONLY auto-save code if user actually asked for code and not a general conversational query
+        if is_coding_request and not is_conversational:
+            sniff1 = sniff_file_from_code(t1_text[0], file1 or "module1.code")
+            sniff2 = sniff_file_from_code(t2_text[0], file2 or "module2.code")
+            saved1 = []
+            saved2 = []
+            if "```" in t1_text[0] and not t1_text[0].startswith("[Inference Error"):
+                saved1 = apply_model_edits(t1_text[0], explicit_filename=sniff1, user_prompt=prompt)
+            if "```" in t2_text[0] and not t2_text[0].startswith("[Inference Error"):
+                saved2 = apply_model_edits(t2_text[0], explicit_filename=sniff2, user_prompt=prompt)
 
-        if not saved1 and t1_text[0].strip():
-            code1 = extract_code_block(t1_text[0])
-            if save_code_to_disk(file1_saved, code1):
-                saved1 = [file1_saved]
-        if not saved2 and t2_text[0].strip():
-            code2 = extract_code_block(t2_text[0])
-            if save_code_to_disk(file2_saved, code2):
-                saved2 = [file2_saved]
-
-        lines1_cnt = len(open(file1_saved, "r", errors="ignore").readlines()) if os.path.exists(file1_saved) else 0
-        lines2_cnt = len(open(file2_saved, "r", errors="ignore").readlines()) if os.path.exists(file2_saved) else 0
-
-        print(f"\n{C_BOLD}{C_GREEN}⚡ Dual Files Auto-Saved:{C_RESET}")
-        print(f"  {C_GREEN}✔ Model 1 ({model1[:14]}):{C_RESET} {C_BOLD}{file1_saved}{C_RESET} ({lines1_cnt} lines on disk)")
-        print(f"  {C_GREEN}✔ Model 2 ({model2[:14]}):{C_RESET} {C_BOLD}{file2_saved}{C_RESET} ({lines2_cnt} lines on disk)")
+            if saved1 or saved2:
+                file1_saved = saved1[0] if saved1 else sniff1
+                file2_saved = saved2[0] if saved2 else sniff2
+                lines1_cnt = len(open(file1_saved, "r", errors="ignore").readlines()) if (saved1 and os.path.exists(file1_saved)) else 0
+                lines2_cnt = len(open(file2_saved, "r", errors="ignore").readlines()) if (saved2 and os.path.exists(file2_saved)) else 0
+                save_lines = []
+                if saved1:
+                    save_lines.append(f"✔ Model 1 ({model1[:14]}): {file1_saved} ({lines1_cnt} lines on disk)")
+                if saved2:
+                    save_lines.append(f"✔ Model 2 ({model2[:14]}): {file2_saved} ({lines2_cnt} lines on disk)")
+                if save_lines:
+                    print("\n" + render_tui_card("⚡ Dual Files Auto-Saved", "\n".join(save_lines), border_color=C_YELLOW, title_color=C_BOLD+C_YELLOW))
 
         m1_history.append({"role": "user", "content": prompt})
         m1_history.append({"role": "assistant", "content": t1_text[0]})
@@ -2244,7 +2322,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
 
     os.system("clear 2>/dev/null || true")
     print(f"\n{C_GREEN}{C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}║           COLIBRISTREAM 2-AI MULTI-TURN DEBATE & REVIEW LOOP                   ║{C_RESET}")
+    print(f"{C_GREEN}{C_BOLD}║           OBSIDIANCORE 2-AI MULTI-TURN DEBATE & REVIEW LOOP                   ║{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}║      Autonomous Sibling Dialogue • Adversarial Code Audit & Verification       ║{C_RESET}")
     print(f"{C_GREEN}{C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝{C_RESET}")
     print(f"│  {C_CYAN}🧠 Lead Architect :{C_RESET} {C_WHITE}{C_BOLD}{model1:<35}{C_RESET} {C_GRAY}[Proposal & Synthesis]{C_RESET} │")
@@ -2380,7 +2458,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                     f"Instructions:\n"
                     f"1. Formulate a comprehensive, production-grade technical solution or architecture.\n"
                     f"2. Explain your algorithmic decisions and trade-offs clearly.\n"
-                    f"3. Provide complete, working code blocks tagged with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save it directly to disk.\n"
+                    f"3. Provide complete, working code blocks tagged with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so ObsidianCore can save it directly to disk.\n"
                 )
             else:
                 arch_prompt = (
@@ -2392,7 +2470,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                     f"1. Directly address every flaw, bug, edge case, and critique raised by the Reviewer.\n"
                     f"2. Defend choices that are technically justified with clear reasoning.\n"
                     f"3. Output a hardened, battle-tested Version {r} with corrected, complete code.\n"
-                    f"4. Tag all code blocks with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so Colibristream can save it directly to disk.\n"
+                    f"4. Tag all code blocks with the exact filename (e.g. ```write:filename.ext or put '# filename: filename.ext' on line 1) so ObsidianCore can save it directly to disk.\n"
                 )
 
             arch_messages = [
@@ -2468,31 +2546,7 @@ def run_chat_session(model_name):
     is_70b = is_giant
     is_32b = any(x in m_lower for x in ["32b", "30b", "27b"])
 
-    print(f"{C_GREEN}{C_BOLD}┌────────────────────────────────────────────────────────────────────────┐{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}│  COLIBRISTREAM AUTONOMOUS CODING RUNTIME (AIDER-STYLE LOCAL AGENT)     │{C_RESET}")
-    print(f"{C_GREEN}{C_BOLD}├────────────────────────────────────────────────────────────────────────┤{C_RESET}")
-    vram_mb = get_visible_vram_mb()
-    print(f"│  {C_CYAN}Active Model:{C_RESET} {C_BOLD}{model_name:<30}{C_RESET} {C_GRAY}[100% Local • Zero Cloud]{C_RESET}   │")
-    print(f"│  {C_YELLOW}Workspace   :{C_RESET} {C_WHITE}{os.getcwd():<47.47s}{C_RESET} │")
-    if vram_mb == 0:
-        print(f"│  {C_YELLOW}Memory Mode :{C_RESET} {C_GREEN}High-RAM Host Mode (System Memory Acceleration • 0 VRAM){C_RESET}   │")
-    elif is_32b:
-        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Strictly ~17 GB VRAM (100% on GPU • 0 Host RAM • 0 CPU){C_RESET}   │")
-    elif is_giant:
-        if vram_mb >= 44000:
-            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}Multi-GPU Mode (Capped <= 48GB Budget Across All Cards){C_RESET}      │")
-        else:
-            print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_YELLOW}Safe Partial VRAM Offload (Capped to Fit Available VRAM){C_RESET}    │")
-    else:
-        print(f"│  {C_YELLOW}VRAM Budget :{C_RESET} {C_GREEN}100% GPU VRAM Native Acceleration (<10 GB VRAM){C_RESET}          │")
-    idle_val = get_idle_timeout()
-    idle_disp = f"Sleep after {idle_val} (100% RAM/VRAM freed)" if idle_val != "never" else "Disabled (Kept in memory)"
-    print(f"│  {C_YELLOW}Memory Idle :{C_RESET} {C_CYAN}{idle_disp:<47.47s}{C_RESET} │")
-    print(f"├────────────────────────────────────────────────────────────────────────┤")
-    print(f"│  {C_BOLD}Commands:{C_RESET}    {C_YELLOW}/model <name>{C_RESET} | {C_YELLOW}/swarm{C_RESET}      | {C_YELLOW}/idle <time>{C_RESET} | {C_YELLOW}/sleep{C_RESET} (Free RAM)│")
-    print(f"│               {C_YELLOW}/add <file>{C_RESET}   | {C_YELLOW}/diff{C_RESET}       | {C_YELLOW}/undo{C_RESET}       | {C_YELLOW}!cmd{C_RESET} (Shell)     │")
-    print(f"│               {C_YELLOW}/files{C_RESET}        | {C_YELLOW}/menu{C_RESET}       | {C_YELLOW}/clear{C_RESET}      | {C_YELLOW}/exit{C_RESET}            │")
-    print(f"{C_GREEN}{C_BOLD}└────────────────────────────────────────────────────────────────────────┘{C_RESET}")
+    print_tui_header(model_name)
 
     if is_70b and vram_mb < 44000:
         print(f"\n{C_YELLOW}┌── HARDWARE ADVISORY: 72B SINGLE-CARD BOTTLENECK ──────────────────────┐{C_RESET}")
@@ -2501,9 +2555,9 @@ def run_chat_session(model_name):
         print(f"│ {C_BOLD}Bandwidth{C_RESET}   : DDR4 RAM is ~35 GB/s (vs GPU ~700 GB/s) -> caps to ~1 tok/s │")
         print(f"│                                                                      │")
         print(f"│ {C_GREEN}★ HOW TO GET 20-25+ TOK/S:{C_RESET}                                           │")
-        print(f"│   1. Dual GPUs (>=48GB VRAM): Switch with 'colistream gpu all'        │")
+        print(f"│   1. Dual GPUs (>=48GB VRAM): Switch with 'obsidiancore gpu all'        │")
         print(f"│   2. Single 24GB Card: Run 32B Coder (17GB VRAM, 0 RAM, 0 CPU @ 25 t/s)│")
-        print(f"│      Command: {C_CYAN}colistream run 32b{C_RESET}                                      │")
+        print(f"│      Command: {C_CYAN}obsidiancore run 32b{C_RESET}                                      │")
         print(f"{C_YELLOW}└──────────────────────────────────────────────────────────────────────┘{C_RESET}\n")
 
     history = [
@@ -2514,7 +2568,7 @@ def run_chat_session(model_name):
 
     while True:
         try:
-            prompt = input(f"\n{C_BOLD}{C_GREEN}You ❯ {C_RESET}").strip()
+            prompt = input(f"\n{C_BOLD}{C_GREEN}ObsidianCore ❯ {C_RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print(f"\n{C_DIM}Exiting session.{C_RESET}")
             sys.exit(0)
@@ -2636,13 +2690,8 @@ def run_chat_session(model_name):
         history[0]["content"] = build_system_prompt()
         history.append({"role": "user", "content": prompt})
 
-        if is_70b:
-            status_hint = f"{C_DIM}[Evaluating 72B layers across GPU + RAM... ~45s]{C_RESET}"
-        elif is_32b:
-            status_hint = f"{C_DIM}[Processing on GPU VRAM (17GB)...]{C_RESET}"
-        else:
-            status_hint = f"{C_DIM}[Processing on GPU...]{C_RESET}"
-
+        # Render User Prompt in TUI Card
+        print("\n" + render_tui_card("👤 You", prompt, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
         print("")
         response_text, speed, eval_tokens, prompt_tokens, tot_dur = stream_chat(model_name, history, color=C_CYAN)
         if response_text:
@@ -2881,9 +2930,9 @@ except Exception:
     fi
   fi
 
-  local chat_script="${DIR}/colibri_chat.py"
+  local chat_script="${DIR}/obsidian_chat.py"
   if [ ! -f "$chat_script" ]; then
-    chat_script="/tmp/colibri_chat.py"
+    chat_script="/tmp/obsidian_chat.py"
   fi
   write_inline_chat_script "$chat_script"
 
@@ -2958,9 +3007,9 @@ cmd_swarm() {
     esac
   fi
 
-  local chat_script="${DIR}/colibri_chat.py"
+  local chat_script="${DIR}/obsidian_chat.py"
   if [ ! -f "$chat_script" ]; then
-    chat_script="/tmp/colibri_chat.py"
+    chat_script="/tmp/obsidian_chat.py"
   fi
   write_inline_chat_script "$chat_script"
 
@@ -2987,9 +3036,9 @@ cmd_parallel() {
   local m1="${1:-qwen3:14b}"
   local m2="${2:-qwen2.5-coder:1.5b}"
 
-  local chat_script="${DIR}/colibri_chat.py"
+  local chat_script="${DIR}/obsidian_chat.py"
   if [ ! -f "$chat_script" ]; then
-    chat_script="/tmp/colibri_chat.py"
+    chat_script="/tmp/obsidian_chat.py"
   fi
   write_inline_chat_script "$chat_script"
 
@@ -3159,7 +3208,7 @@ cmd_swarm_builder() {
   if [ "$SWARM_MODE" = "parallel" ]; then
     echo -e "  • ${C_CYAN}Mode   :${C_RESET} ⚡ Dual-Console Simultaneous (Side-by-side split screen • Writes 2 files at the same time)\n"
     echo -e "${C_YELLOW}Direct Command to run this Dual Swarm anytime:${C_RESET}"
-    echo -e "  ${C_BOLD}${C_WHITE}colistream parallel ${MODEL1} ${MODEL2}${C_RESET}\n"
+    echo -e "  ${C_BOLD}${C_WHITE}obsidiancore parallel ${MODEL1} ${MODEL2}${C_RESET}\n"
     read_input "${C_BOLD}Press Enter to boot this dual-console session now [Enter/b]: ${C_RESET}" CONF
     if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
       cmd_parallel "$MODEL1" "$MODEL2"
@@ -3167,7 +3216,7 @@ cmd_swarm_builder() {
   else
     echo -e "  • ${C_PURPLE}Mode   :${C_RESET} 🔄 Sequential Adversarial Debate (Multi-turn back-and-forth)\n"
     echo -e "${C_YELLOW}Direct Command to run this Debate Swarm anytime:${C_RESET}"
-    echo -e "  ${C_BOLD}${C_WHITE}colistream debate ${MODEL1} ${MODEL2}${C_RESET}\n"
+    echo -e "  ${C_BOLD}${C_WHITE}obsidiancore debate ${MODEL1} ${MODEL2}${C_RESET}\n"
     read_input "${C_BOLD}Press Enter to boot this debate session now [Enter/b]: ${C_RESET}" CONF
     if [ "$CONF" != "b" ] && [ "$CONF" != "B" ]; then
       cmd_swarm "$MODEL1" "$MODEL2"
@@ -3271,7 +3320,7 @@ cmd_big_catalog() {
     fi
 
     if [ "$SUB_CHOICE" = "q" ] || [ "$SUB_CHOICE" = "Q" ] || [ "$SUB_CHOICE" = "exit" ] || [ "$SUB_CHOICE" = "quit" ]; then
-      echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
+      echo -e "${C_DIM}Exiting ObsidianCore.${C_RESET}"
       exit 0
     fi
 
@@ -3359,11 +3408,11 @@ cmd_loop_menu() {
     clear 2>/dev/null || true
     echo -e "${C_GREEN}${C_BOLD}"
     cat << "EOF"
-   ______      ___ __          _      __                         
-  / ____/___  / (_) /_  _____ (_)____/ /__________  ____ _____ ___ 
- / /   / __ \/ / / __ \/ ___// / ___/ __/ ___/ _ \/ __ `/ __ `__ \
-/ /___/ /_/ / / / /_/ / /   / (__  ) /_/ /  /  __/ /_/ / / / / / /
-\____/\____/_/_/_.___/_/   /_/____/\__/_/   \___/\__,_/_/ /_/ /_/ 
+   ____  __          _     ___             ______              
+  / __ \/ /_  _____ (_)___/ (_)___ _____  / ____/___  ________ 
+ / / / / __ \/ ___// / __  / / __ `/ __ \/ /   / __ \/ ___/ _ \
+/ /_/ / /_/ (__  )/ / /_/ / / /_/ / / / / /___/ /_/ / /  /  __/
+\____/_.___/____//_/\__,_/_/\__,_/_/ /_/\____/\____/_/   \___/ 
 EOF
     echo -e "${C_RESET}${C_DIM}             Autonomous Bare-Metal Local Intelligence Engine${C_RESET}\n"
 
@@ -3376,19 +3425,19 @@ EOF
     echo -e "│ ${C_YELLOW}Zero paywalls • Weights stored 1x in RAM • Real-time collaboration │${C_RESET}"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[3]${C_RESET} ${C_GREEN}DeepSeek MoE Swarm${C_RESET} (R1 Reasoner + Coder Synthesizer)        │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
+    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore swarm deepseek-r1:14b deepseek-coder${C_RESET}│"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[5]${C_RESET} ${C_CYAN}Custom Swarm Builder${C_RESET} (Pair ANY 2 Models Side-by-Side to Code 2 Files)   │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream parallel <m1> <m2>${C_RESET}                  │"
+    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore parallel <m1> <m2>${C_RESET}                  │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[6]${C_RESET} ${C_GREEN}Universal Model Hub Catalog${C_RESET} (All Free Models & Frontier MoE)│"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream models${C_RESET} (or type ${C_CYAN}mod 6${C_RESET})               │"
+    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore models${C_RESET} (or type ${C_CYAN}mod 6${C_RESET})               │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[g]${C_RESET} ${C_PURPLE}Switch Active GPU Card${C_RESET} (Isolate Fast Card / Bypass Slow)    │"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream gpu <id|all>${C_RESET}                         │"
+    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore gpu <id|all>${C_RESET}                         │"
     echo -e "│                                                                   │"
     echo -e "│  ${C_BOLD}[d]${C_RESET} ${C_YELLOW}Hardware & Speed Diagnostics${C_RESET} (Inspect GPU/CPU VRAM Splits)│"
-    echo -e "│      → Direct Command: ${C_CYAN}colistream diag${C_RESET}                                 │"
+    echo -e "│      → Direct Command: ${C_CYAN}obsidiancore diag${C_RESET}                                 │"
     echo -e "├───────────────────────────────────────────────────────────────────┤"
     echo -e "│  ${C_BOLD}[q]${C_RESET} ${C_DIM}Quit / Exit${C_RESET}                                                  │"
     echo -e "${C_BOLD}└───────────────────────────────────────────────────────────────────┘${C_RESET}\n"
@@ -3473,7 +3522,7 @@ EOF
         bash "${DIR}/share.sh"
         ;;
       q|Q|exit)
-        echo -e "${C_DIM}Exiting Colibristream.${C_RESET}"
+        echo -e "${C_DIM}Exiting ObsidianCore.${C_RESET}"
         exit 0
         ;;
       *)
@@ -3538,6 +3587,6 @@ case "$1" in
     cmd_run "32b"
     ;;
   *)
-    echo -e "${C_BOLD}Usage:${C_RESET} colistream [menu|models|run <model>|parallel [m1] [m2]|swarm [m1] [m2]|debate [m1] [m2]|share|diag|turbo|gpu [id]|restart [id]|list|catalog]"
+    echo -e "${C_BOLD}Usage:${C_RESET} obsidiancore [menu|models|run <model>|parallel [m1] [m2]|swarm [m1] [m2]|debate [m1] [m2]|share|diag|turbo|gpu [id]|restart [id]|list|catalog]"
     ;;
 esac

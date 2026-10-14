@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Colibristream Worldwide Share — Zero-Password Global Access Engine
+# ObsidianCore Worldwide Share — Zero-Password Global Access Engine
 # Automatically starts local server, creates encrypted public HTTPS tunnel,
 # updates the installer, and gives you instant access from ANY computer or phone.
 # ==============================================================================
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${HOME}/.colistream"
+LOG_DIR="${HOME}/.obsidiancore"
 mkdir -p "$LOG_DIR"
 TUNNEL_LOG="${LOG_DIR}/tunnel_share.log"
 
@@ -113,16 +113,16 @@ trap cleanup SIGINT SIGTERM
 clear 2>/dev/null || true
 echo -e "${C_GREEN}${C_BOLD}"
 cat << "BANNER"
-   ______      ___ __          _      __                         
-  / ____/___  / (_) /_  _____ (_)____/ /__________  ____ _____ ___ 
- / /   / __ \/ / / __ \/ ___// / ___/ __/ ___/ _ \/ __ `/ __ `__ \
-/ /___/ /_/ / / / /_/ / /   / (__  ) /_/ /  /  __/ /_/ / / / / / /
-\____/\____/_/_/_.___/_/   /_/____/\__/_/   \___/\__,_/_/ /_/ /_/ 
+   ____  __          _     ___             ______              
+  / __ \/ /_  _____ (_)___/ (_)___ _____  / ____/___  ________ 
+ / / / / __ \/ ___// / __  / / __ `/ __ \/ /   / __ \/ ___/ _ \
+/ /_/ / /_/ (__  )/ / /_/ / / /_/ / / / / /___/ /_/ / /  /  __/
+\____/_.___/____//_/\__,_/_/\__,_/_/ /_/\____/\____/_/   \___/ 
 BANNER
 echo -e "${C_RESET}${C_DIM}           Worldwide Gateway • Zero Password • Instant Access Everywhere${C_RESET}\n"
 
 echo -e "${C_GREEN}${C_BOLD}╔════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
-echo -e "${C_GREEN}${C_BOLD}║          COLIBRISTREAM IS NOW LIVE WORLDWIDE (ZERO PASSWORDS NEEDED)           ║${C_RESET}"
+echo -e "║          OBSIDIANCORE IS NOW LIVE WORLDWIDE (ZERO PASSWORDS NEEDED)            ║"
 echo -e "${C_GREEN}${C_BOLD}╚════════════════════════════════════════════════════════════════════════════════╝${C_RESET}\n"
 
 echo -e "${C_BOLD}🌐 WEB ACCESS FROM ANY DEVICE (Phone, Laptop, Tablet, PC):${C_RESET}"
