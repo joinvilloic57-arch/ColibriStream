@@ -1053,16 +1053,16 @@ def stream_chat(model_name, messages, api_url="http://localhost:11434/api/chat",
             else:
                 sys.stdout.write(f"\r\033[K{C_YELLOW}[!] Inference error ({e.code}): {error_msg}{C_RESET}\n")
                 sys.stdout.flush()
-                return "".join(full_response), 0, 0
+                return "".join(full_response), 0.0, 0, 0, 0.0
         except Exception as e:
             stop_spinner.set()
             sys.stdout.write(f"\r\033[K{C_YELLOW}[!] Stream error: {e}{C_RESET}\n")
             sys.stdout.flush()
-            return "".join(full_response), 0, 0
+            return "".join(full_response), 0.0, 0, 0, 0.0
         finally:
             stop_spinner.set()
             
-    return "".join(full_response), 0, 0
+    return "".join(full_response), 0.0, 0, 0, 0.0
 
 def stream_chat_silent(model_name, messages, api_url="http://localhost:11434/api/chat"):
     model_name = resolve_model_name(model_name)
@@ -1537,7 +1537,16 @@ def run_parallel_swarm_session(model1_name, model2_name):
     while True:
         try:
             prompt = input(f"\n{C_BOLD}{C_GREEN}ObsidianCore Swarm ❯ {C_RESET}").strip()
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
+            print(f"\n{C_DIM}(Type /exit to leave swarm){C_RESET}")
+            continue
+        except EOFError:
+            if os.path.exists('/dev/tty') and not sys.stdin.isatty():
+                try:
+                    sys.stdin = open('/dev/tty', 'r')
+                    continue
+                except Exception:
+                    pass
             print(f"\n{C_DIM}Dual Swarm session ended.{C_RESET}")
             break
 
@@ -1644,7 +1653,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
             print(f"\n{C_GREEN}{C_BOLD}🧠 Lead Architect ({lead_model}):{C_RESET}")
             sys_m = f"You are {lead_model}, Lead Architect in ObsidianCore. Answer the user's question directly, accurately, and thoroughly."
             msgs = [{"role": "system", "content": sys_m}] + list(m1_history) + [{"role": "user", "content": direct_q}]
-            ans, _, _ = stream_chat(lead_model, msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
+            ans, *_ = stream_chat(lead_model, msgs, color=C_GREEN, api_url=f"{api_base}/api/chat")
             m1_history.append({"role": "user", "content": direct_q})
             m1_history.append({"role": "assistant", "content": ans})
             last_solutions["1"] = ans
@@ -1656,7 +1665,7 @@ def run_parallel_swarm_session(model1_name, model2_name):
             print(f"\n{C_CYAN}{C_BOLD}🔍 Fast Copilot ({fast_model}):{C_RESET}")
             sys_m = f"You are {fast_model}, fast assistant in ObsidianCore. Answer the user's question directly, accurately, and concisely."
             msgs = [{"role": "system", "content": sys_m}] + list(m2_history) + [{"role": "user", "content": direct_q}]
-            ans, _, _ = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
+            ans, *_ = stream_chat(fast_model, msgs, color=C_CYAN, api_url=f"{api_base}/api/chat")
             m2_history.append({"role": "user", "content": direct_q})
             m2_history.append({"role": "assistant", "content": ans})
             last_solutions["2"] = ans
@@ -1964,7 +1973,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                 {"role": "user", "content": arch_prompt}
             ]
 
-            arch_output, arch_spd, arch_toks = stream_chat(model1, arch_messages, color=C_CYAN)
+            arch_output, arch_spd, arch_toks, *_ = stream_chat(model1, arch_messages, color=C_CYAN)
             current_proposal = arch_output
             last_arch_solution = arch_output
             last_refined_solution = arch_output
@@ -2005,7 +2014,7 @@ def run_swarm_debate_session(model1_name, model2_name, rounds=2):
                 {"role": "user", "content": rev_prompt}
             ]
 
-            rev_output, rev_spd, rev_toks = stream_chat(model2, rev_messages, color=C_PURPLE)
+            rev_output, rev_spd, rev_toks, *_ = stream_chat(model2, rev_messages, color=C_PURPLE)
             current_critique = rev_output
             last_rev_solution = rev_output
 
@@ -2057,7 +2066,16 @@ def run_chat_session(model_name):
     while True:
         try:
             prompt = input(f"\n{C_BOLD}{C_GREEN}✦ ObsidianCore ❯ {C_RESET}").strip()
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
+            print(f"\n{C_DIM}(Type /exit to leave chat, or /menu for Model Hub){C_RESET}")
+            continue
+        except EOFError:
+            if os.path.exists('/dev/tty') and not sys.stdin.isatty():
+                try:
+                    sys.stdin = open('/dev/tty', 'r')
+                    continue
+                except Exception:
+                    pass
             print(f"\n{C_DIM}Exiting session.{C_RESET}")
             sys.exit(0)
 
@@ -2178,21 +2196,30 @@ def run_chat_session(model_name):
         history[0]["content"] = build_system_prompt()
         history.append({"role": "user", "content": prompt})
 
-        # Render User Prompt in TUI Card
-        print("\n" + render_tui_card("✦ You", prompt, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
-        print("")
-        response_text, speed, eval_tokens, prompt_tokens, tot_dur = stream_chat(model_name, history, color=C_CYAN)
-        if response_text:
-            history.append({"role": "assistant", "content": response_text})
-            last_response_text = response_text
-            # Autonomous Aider-style File Modification Engine
-            apply_model_edits(response_text, user_prompt=prompt)
+        try:
+            # Render User Prompt in TUI Card
+            print("\n" + render_tui_card("✦ You", prompt, border_color=C_GREEN, title_color=C_BOLD+C_GREEN))
+            print("")
+            chat_res = stream_chat(model_name, history, color=C_CYAN)
+            response_text = chat_res[0] if len(chat_res) > 0 else ""
+            speed = chat_res[1] if len(chat_res) > 1 else 0.0
+            eval_tokens = chat_res[2] if len(chat_res) > 2 else 0
+            prompt_tokens = chat_res[3] if len(chat_res) > 3 else 0
+            tot_dur = chat_res[4] if len(chat_res) > 4 else 0.0
 
-        tot_tokens = eval_tokens + prompt_tokens
-        speed_str = f"• {speed:.1f} tok/s" if speed > 0 else ""
-        dur_str = f"• {tot_dur:.1f}s" if tot_dur > 0 else ""
-        p_str = f"Prompt: {prompt_tokens} | " if prompt_tokens > 0 else ""
-        print(f"\n{C_DIM}└─ [Output: {eval_tokens} toks | {p_str}Total: {tot_tokens} {speed_str} {dur_str}]{C_RESET}")
+            if response_text:
+                history.append({"role": "assistant", "content": response_text})
+                last_response_text = response_text
+                # Autonomous Aider-style File Modification Engine
+                apply_model_edits(response_text, user_prompt=prompt)
+
+            tot_tokens = eval_tokens + prompt_tokens
+            speed_str = f"• {speed:.1f} tok/s" if speed > 0 else ""
+            dur_str = f"• {tot_dur:.1f}s" if tot_dur > 0 else ""
+            p_str = f"Prompt: {prompt_tokens} | " if prompt_tokens > 0 else ""
+            print(f"\n{C_DIM}└─ [Output: {eval_tokens} toks | {p_str}Total: {tot_tokens} {speed_str} {dur_str}]{C_RESET}")
+        except Exception as e:
+            print(f"\n{C_YELLOW}[!] Generation notice: {e}{C_RESET}")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] in ("--swarm", "--debate", "swarm", "debate"):

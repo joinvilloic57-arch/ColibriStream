@@ -50,8 +50,12 @@ read_input() {
   local __var="$2"
   echo -ne "$prompt" >&2
   if ! read -r "$__var"; then
-    eval "$__var='q'"
-    return 1
+    if [ -t 1 ] && [ -r /dev/tty ]; then
+      read -r "$__var" </dev/tty 2>/dev/null || eval "$__var='q'"
+    else
+      eval "$__var='q'"
+      return 1
+    fi
   fi
 }
 
@@ -3176,9 +3180,14 @@ except Exception:
   local exit_code=0
   python3 "$chat_script" "$model"
   exit_code=$?
-  if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 130 ] && [ "$exit_code" -ne 42 ]; then
+  if [ "$exit_code" -eq 42 ]; then
+    cmd_loop_menu
+    return 0
+  fi
+  if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 130 ]; then
     echo -e "\n${C_YELLOW}[!] Session closed with status code ${exit_code}.${C_RESET}"
     read_input "${C_BOLD}Press Enter to return to menu: ${C_RESET}" _
+    cmd_loop_menu
   fi
 }
 
